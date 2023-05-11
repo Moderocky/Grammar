@@ -5,9 +5,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>mx.kenzie</groupId>
-    <artifactId>conlang</artifactId>
+    <artifactId>grammar</artifactId>
     <version>1.0.0</version>
-    <name>Conlang</name>
+    <name>Grammar</name>
     <description>Standard resources for building an object notation.</description>
 
     <properties>
