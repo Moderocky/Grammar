@@ -2,10 +2,7 @@ package mx.kenzie.grammar;
 
 import sun.reflect.ReflectionFactory;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Modifier;
+import java.lang.reflect.*;
 import java.util.*;
 
 public class Grammar {
@@ -16,38 +13,205 @@ public class Grammar {
         return this.marshal(object, object.getClass(), new LinkedHashMap<>());
     }
 
-    protected <Type, Container extends Map<String, Object>> Container marshal(Object object, Class<Type> type, Container container) {
-
+    protected <Type, Container extends Map<?, ?>> Type unmarshal(Class<Type> type, Container container) {
+        final Type object = this.createObject(type);
+        this.unmarshal(object, type, container);
+        return object;
     }
 
-    protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Class<?> type, Container container) {
+    /**
+     * Extracts the relevant data from an object's fields into a map of key-value pairs.
+     * The {@param container} is returned.
+     */
+    protected <Type, Container extends Map<String, Object>> Container marshal(Object object, Class<Type> type, Container container) {
+        //<editor-fold desc="Object to Map" defaultstate="collapsed">
         assert object != null : "Object was null.";
-        assert object instanceof Class<?> ^ true : "Classes cannot be written to.";
         final Set<Field> fields = new HashSet<>();
         fields.addAll(List.of(type.getDeclaredFields()));
         fields.addAll(List.of(type.getFields()));
         for (final Field field : fields) {
-            final int modifiers = field.getModifiers();
-            if ((modifiers & 0x00000002) != 0) continue;
-            if ((modifiers & 0x00000008) != 0) continue;
-            if ((modifiers & 0x00000080) != 0) continue;
-            if ((modifiers & 0x00001000) != 0) continue;
+            if (this.shouldSkip(field)) continue;
+            if (!field.canAccess(object)) field.trySetAccessible();
+            try {
+                final Object value = field.get(object);
+                if (value == null && field.isAnnotationPresent(Optional.class)) continue;
+                final Class<?> expected = field.getType();
+                final String key = this.getName(field);
+                if (key.equals("__data")) continue;
+                container.put(key, this.deconstruct(value, expected, field.isAnnotationPresent(Any.class)));
+            } catch (IllegalAccessException ex) {
+                throw new RuntimeException("Unable to read field '" + type.getSimpleName() + '.' + field.getName() + "' from object:", ex);
+            }
+        }
+        return container;
+        //</editor-fold>
+    }
+
+    /**
+     * Inserts data from a map of key-value pairs into an object's fields.
+     * The {@param container} is returned.
+     */
+    protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Class<?> type, Container container) {
+        //<editor-fold desc="Map to Object" defaultstate="collapsed">
+        assert object != null : "Object was null.";
+        assert !(object instanceof Class<?>) : "Classes cannot be written to.";
+        final Set<Field> fields = new HashSet<>();
+        fields.addAll(List.of(type.getDeclaredFields()));
+        fields.addAll(List.of(type.getFields()));
+        for (final Field field : fields) {
+            if (this.shouldSkip(field)) continue;
             final String key = this.getName(field);
             if (!container.containsKey(key)) continue;
             if (!field.canAccess(object)) field.trySetAccessible();
             final Object value = container.get(key);
             final Class<?> expected = field.getType();
             try {
-                this.map(object, field, expected, value);
+                this.prepareFieldValue(object, field, expected, value);
             } catch (Throwable ex) {
                 throw new RuntimeException("Unable to write to object:", ex);
             }
         }
         return object;
+        //</editor-fold>
     }
 
-    private void map(Object source, Field field, Class<?> expected, Object value) throws IllegalAccessException {
+    /**
+     * Whether {@param field} should be skipped when marshalling.
+     */
+    protected boolean shouldSkip(Field field) {
+        final int modifiers = field.getModifiers();
+        if ((modifiers & 0x00000002) != 0) return true;
+        if ((modifiers & 0x00000008) != 0) return true;
+        if ((modifiers & 0x00000080) != 0) return true;
+        return (modifiers & 0x00001000) != 0;
+    }
 
+    /**
+     * Unmarshalls simple objects into the correct type to be inserted into a field.
+     */
+    @SuppressWarnings("RawUseOfParameterized")
+    private void prepareFieldValue(Object source, Field field, Class<?> expected, Object value) throws IllegalAccessException {
+        //<editor-fold desc="Set Field Value" defaultstate="collapsed">
+        if (expected.isPrimitive()) {
+            if (value instanceof Boolean boo) field.setBoolean(source, boo);
+            else if (value instanceof Number number) {
+                if (expected == byte.class) field.setByte(source, number.byteValue());
+                else if (expected == short.class) field.setShort(source, number.shortValue());
+                else if (expected == int.class) field.setInt(source, number.intValue());
+                else if (expected == long.class) field.setLong(source, number.longValue());
+                else if (expected == double.class) field.setDouble(source, number.doubleValue());
+                else if (expected == float.class) field.setFloat(source, number.floatValue());
+            }
+        } else if (value == null) field.set(source, null);
+        else if (expected.isEnum()) field.set(source, this.createEnum(expected, value));
+        else if (expected == UUID.class && value instanceof String text)
+            field.set(source, UUID.fromString(text));
+        else if (expected.isAssignableFrom(value.getClass())) field.set(source, value);
+        else if (value instanceof Map<?, ?> child) {
+            final Object sub, existing = field.get(source);
+            if (existing == null) field.set(source, sub = this.createObject(expected));
+            else sub = existing;
+            this.unmarshal(sub, expected, child);
+        } else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
+            final Collection current = (Collection) field.get(source), replacement;
+            if (current != null) {
+                replacement = current;
+                replacement.clear();
+            } else if (!Modifier.isAbstract(expected.getModifiers())) {
+                replacement = (Collection) this.createObject(field.getType());
+                field.set(source, replacement);
+            } else if (Set.class.isAssignableFrom(expected)) {
+                replacement = new LinkedHashSet();
+                field.set(source, replacement);
+            } else if (List.class.isAssignableFrom(expected)) {
+                replacement = new ArrayList();
+                field.set(source, replacement);
+            } else {
+                replacement = new LinkedList();
+                field.set(source, replacement);
+            }
+            for (Object o : list) replacement.add(this.construct(o, Object.class));
+        } else if (expected.isArray() && value instanceof Collection<?> list) {
+            final Object array = this.constructArray(expected, list);
+            field.set(source, array);
+        } else throw new RuntimeException("Value of '" + field.getName() + "' (" + source.getClass()
+            .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
+        //</editor-fold>
+    }
+
+    /**
+     * Constructs a complex object from its marshalled type.
+     */
+    protected Object construct(Object data, Class<?> expected) {
+        if (data instanceof Collection<?> list) return this.constructArray(expected, list);
+        else if (data instanceof Map<?, ?> map) return this.unmarshal(this.createObject(expected), expected, map);
+        else return data;
+    }
+
+    /**
+     * Constructs an array from a list of marshalled values.
+     */
+    private Object constructArray(Class<?> type, Collection<?> list) {
+        //<editor-fold desc="List to Array" defaultstate="collapsed">
+        final Class<?> component = type.getComponentType();
+        final Object object = Array.newInstance(component, list.size());
+        final Object[] objects = list.toArray();
+        if (component.isPrimitive()) {
+            if (component == boolean.class) for (int i = 0; i < objects.length; i++)
+                Array.setBoolean(object, i, (boolean) objects[i]);
+            else if (component == int.class) for (int i = 0; i < objects.length; i++)
+                Array.setInt(object, i, ((Number) objects[i]).intValue());
+            else if (component == long.class) for (int i = 0; i < objects.length; i++)
+                Array.setLong(object, i, ((Number) objects[i]).longValue());
+            else if (component == double.class) for (int i = 0; i < objects.length; i++)
+                Array.setDouble(object, i, ((Number) objects[i]).doubleValue());
+            else if (component == float.class) for (int i = 0; i < objects.length; i++)
+                Array.setFloat(object, i, ((Number) objects[i]).floatValue());
+        } else if (component.isEnum()) for (int i = 0; i < objects.length; i++)
+            Array.set(object, i, this.createEnum(component, objects[i]));
+        else if (component == UUID.class) for (int i = 0; i < objects.length; i++)
+            Array.set(object, i, UUID.fromString(objects[i].toString()));
+        else {
+            final Object[] array = (Object[]) object;
+            for (int i = 0; i < objects.length; i++) array[i] = this.construct(objects[i], component);
+        }
+        return object;
+        //</editor-fold>
+    }
+
+    /**
+     * Deconstructs a complex object into its marshalled type.
+     */
+    private Object deconstruct(Object value, Class<?> component, boolean any) {
+        //<editor-fold desc="Complex to Simple" defaultstate="collapsed">
+        if (value == null) return null;
+        else if (value instanceof String || value instanceof Number || value instanceof Boolean
+            || value instanceof List<?> || value instanceof Map<?, ?>) return value;
+        if (value.getClass().isArray()) {
+            final List<Object> list = new ArrayList<>();
+            this.deconstructArray(value, component.getComponentType(), list, false);
+            return list;
+        }
+        final Map<String, Object> map = new LinkedHashMap<>();
+        this.marshal(value, (Class<?>) (any ? value.getClass() : component), map);
+        return map;
+        //</editor-fold>
+    }
+
+    private void deconstructArray(Object array, Class<?> component, List<Object> list, boolean any) {
+        //<editor-fold desc="Array to List" defaultstate="collapsed">
+        if (component.isPrimitive()) {
+            if (array instanceof int[] numbers) for (int number : numbers) list.add(number);
+            else if (array instanceof long[] numbers) for (long number : numbers) list.add(number);
+            else if (array instanceof double[] numbers) for (double number : numbers) list.add(number);
+            else if (array instanceof float[] numbers) for (float number : numbers) list.add(number);
+            else if (array instanceof boolean[] numbers) for (boolean number : numbers) list.add(number);
+        } else {
+            final Object[] objects = (Object[]) array;
+            if (any) for (final Object object : objects) list.add(this.construct(object, object.getClass()));
+            else for (final Object object : objects) list.add(this.construct(object, component));
+        }
+        //</editor-fold>
     }
 
     private String getName(Field field) {
