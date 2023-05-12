@@ -37,10 +37,12 @@ public class GrammarTest {
     @Test
     public void testUnmarshal() {
         class Thing {
-            final int number = 10;
-            final String word = "hello";
+            int number = 5;
+            String word = "there";
         }
         final Thing thing = new Thing();
+        thing.number = 10;
+        thing.word = "hello";
         final Grammar grammar = new Grammar();
         final Map<String, Object> map = Map.of("number", 10, "word", "hello");
         final Thing result = grammar.unmarshal(thing, map);
