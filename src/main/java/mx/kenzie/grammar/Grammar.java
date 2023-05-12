@@ -19,6 +19,11 @@ public class Grammar {
         return object;
     }
 
+    protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Container container) {
+        this.unmarshal(object, object.getClass(), container);
+        return object;
+    }
+
     /**
      * Extracts the relevant data from an object's fields into a map of key-value pairs.
      * The {@param container} is returned.
@@ -66,7 +71,7 @@ public class Grammar {
             final Object value = container.get(key);
             final Class<?> expected = field.getType();
             try {
-                this.prepareFieldValue(object, field, expected, value);
+                this.prepareFieldValue(object, field, expected, this.construct(value, expected));
             } catch (Throwable ex) {
                 throw new RuntimeException("Unable to write to object:", ex);
             }
@@ -103,9 +108,6 @@ public class Grammar {
                 else if (expected == float.class) field.setFloat(source, number.floatValue());
             }
         } else if (value == null) field.set(source, null);
-        else if (expected.isEnum()) field.set(source, this.createEnum(expected, value));
-        else if (expected == UUID.class && value instanceof String text)
-            field.set(source, UUID.fromString(text));
         else if (expected.isAssignableFrom(value.getClass())) field.set(source, value);
         else if (value instanceof Map<?, ?> child) {
             final Object sub, existing = field.get(source);
@@ -113,29 +115,19 @@ public class Grammar {
             else sub = existing;
             this.unmarshal(sub, expected, child);
         } else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
-            final Collection current = (Collection) field.get(source), replacement;
-            if (current != null) {
-                replacement = current;
-                replacement.clear();
-            } else if (!Modifier.isAbstract(expected.getModifiers())) {
+            final Collection replacement;
+            if (field.get(source) instanceof Collection current) (replacement = current).clear();
+            else if (!Modifier.isAbstract(expected.getModifiers()))
                 replacement = (Collection) this.createObject(field.getType());
-                field.set(source, replacement);
-            } else if (Set.class.isAssignableFrom(expected)) {
-                replacement = new LinkedHashSet();
-                field.set(source, replacement);
-            } else if (List.class.isAssignableFrom(expected)) {
-                replacement = new ArrayList();
-                field.set(source, replacement);
-            } else {
-                replacement = new LinkedList();
-                field.set(source, replacement);
-            }
-            for (Object o : list) replacement.add(this.construct(o, Object.class));
-        } else if (expected.isArray() && value instanceof Collection<?> list) {
-            final Object array = this.constructArray(expected, list);
-            field.set(source, array);
-        } else throw new RuntimeException("Value of '" + field.getName() + "' (" + source.getClass()
-            .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
+            else if (Set.class.isAssignableFrom(expected)) replacement = new LinkedHashSet();
+            else if (List.class.isAssignableFrom(expected)) replacement = new ArrayList();
+            else replacement = new LinkedList();
+            for (Object thing : list) replacement.add(this.construct(thing, Object.class));
+            field.set(source, replacement);
+        } else if (expected.isArray() && value instanceof Collection<?> list)
+            field.set(source, this.constructArray(expected, list));
+        else throw new RuntimeException("Value of '" + field.getName() + "' (" + source.getClass()
+                .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
         //</editor-fold>
     }
 
@@ -143,8 +135,12 @@ public class Grammar {
      * Constructs a complex object from its marshalled type.
      */
     protected Object construct(Object data, Class<?> expected) {
-        if (data instanceof Collection<?> list) return this.constructArray(expected, list);
-        else if (data instanceof Map<?, ?> map) return this.unmarshal(this.createObject(expected), expected, map);
+        if (data == null) return null;
+        else if (data instanceof Collection<?> list && expected.isArray()) return this.constructArray(expected, list);
+        else if (data instanceof Map<?, ?> map && !Map.class.isAssignableFrom(expected))
+            return this.unmarshal(this.createObject(expected), expected, map);
+        else if (expected.isEnum()) return this.createEnum(expected, data);
+        else if (expected == UUID.class && data instanceof String text) return UUID.fromString(text);
         else return data;
     }
 
@@ -221,6 +217,7 @@ public class Grammar {
 
     @SuppressWarnings("all")
     private Object createEnum(Class<?> type, Object value) {
+        if (value instanceof Number number) return type.getEnumConstants()[number.intValue()];
         return Enum.valueOf((Class) type, value.toString());
     }
 
