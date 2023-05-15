@@ -45,7 +45,7 @@ public class Grammar {
                 if (key.equals("__data")) continue;
                 container.put(key, this.deconstruct(value, expected, field.isAnnotationPresent(Any.class)));
             } catch (IllegalAccessException ex) {
-                throw new RuntimeException("Unable to read field '" + type.getSimpleName() + '.' + field.getName() + "' from object:", ex);
+                throw new GrammarException("Unable to read field '" + type.getSimpleName() + '.' + field.getName() + "' from object:", ex);
             }
         }
         return container;
@@ -64,8 +64,18 @@ public class Grammar {
         fields.addAll(List.of(type.getDeclaredFields()));
         fields.addAll(List.of(type.getFields()));
         for (final Field field : fields) {
-            if (this.shouldSkip(field)) continue;
             final String key = this.getName(field);
+            if (key.equals("__data")) try {
+                if (!field.canAccess(object)) field.trySetAccessible();
+                assert Map.class.isAssignableFrom(field.getType()) : "Dataset field must accept map.";
+                final Map<String, Object> initial = (Map<String, Object>) field.get(object);
+                if (initial != null) initial.putAll((Map<? extends String, ?>) container);
+                else field.set(object, new LinkedHashMap<>(container));
+                continue;
+            } catch (IllegalAccessException ex) {
+                throw new GrammarException("Unable to store dataset object.", ex);
+            }
+            if (this.shouldSkip(field)) continue;
             if (!container.containsKey(key)) continue;
             if (!field.canAccess(object)) field.trySetAccessible();
             final Object value = container.get(key);
@@ -73,7 +83,7 @@ public class Grammar {
             try {
                 this.prepareFieldValue(object, field, expected, this.construct(value, expected));
             } catch (Throwable ex) {
-                throw new RuntimeException("Unable to write to object:", ex);
+                throw new GrammarException("Unable to write to object:", ex);
             }
         }
         return object;
@@ -126,7 +136,7 @@ public class Grammar {
             field.set(source, replacement);
         } else if (expected.isArray() && value instanceof Collection<?> list)
             field.set(source, this.constructArray(expected, list));
-        else throw new RuntimeException("Value of '" + field.getName() + "' (" + source.getClass()
+        else throw new GrammarException("Value of '" + field.getName() + "' (" + source.getClass()
                 .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
         //</editor-fold>
     }
@@ -181,11 +191,23 @@ public class Grammar {
     private Object deconstruct(Object value, Class<?> component, boolean any) {
         //<editor-fold desc="Complex to Simple" defaultstate="collapsed">
         if (value == null) return null;
-        else if (value instanceof String || value instanceof Number || value instanceof Boolean
-            || value instanceof List<?> || value instanceof Map<?, ?>) return value;
+        else if (value instanceof String || value instanceof Number || value instanceof Boolean) return value;
+        else if (value instanceof List<?> list) {
+            final List<Object> replacement = new ArrayList<>(list.size());
+            for (Object object : list)
+                replacement.add(this.deconstruct(object, object == null ? null : object.getClass(), any));
+            return replacement;
+        } else if (value instanceof Map<?, ?> map) {
+            final Map<String, Object> replacement = new LinkedHashMap<>(map.size());
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                final Object object = entry.getValue();
+                replacement.put(String.valueOf(entry.getKey()), this.deconstruct(entry.getValue(), object == null ? null : object.getClass(), any));
+            }
+            return replacement;
+        }
         if (value.getClass().isArray()) {
             final List<Object> list = new ArrayList<>();
-            this.deconstructArray(value, component.getComponentType(), list, false);
+            this.deconstructArray(value, component.getComponentType(), list, any);
             return list;
         }
         final Map<String, Object> map = new LinkedHashMap<>();
@@ -204,8 +226,8 @@ public class Grammar {
             else if (array instanceof boolean[] numbers) for (boolean number : numbers) list.add(number);
         } else {
             final Object[] objects = (Object[]) array;
-            if (any) for (final Object object : objects) list.add(this.construct(object, object.getClass()));
-            else for (final Object object : objects) list.add(this.construct(object, component));
+            if (any) for (final Object object : objects) list.add(this.deconstruct(object, object.getClass(), true));
+            else for (final Object object : objects) list.add(this.deconstruct(object, component, false));
         }
         //</editor-fold>
     }
@@ -252,7 +274,7 @@ public class Grammar {
             return constructor.newInstance();
         } catch (InvocationTargetException | InstantiationException | IllegalAccessException |
                  NoSuchMethodException e) {
-            throw new RuntimeException("Unable to create '" + type.getSimpleName() + "' object.", e);
+            throw new GrammarException("Unable to create '" + type.getSimpleName() + "' object.", e);
         }
     }
 
