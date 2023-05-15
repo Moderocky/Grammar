@@ -244,7 +244,9 @@ public class Grammar {
         }
     }
 
+    @SuppressWarnings("unchecked")
     protected <Type> Type createObject(Class<Type> type) {
+        if (type.isArray()) return (Type) Array.newInstance(type, 0);
         try {
             final Constructor<Type> constructor = this.getConstructor(type);
             return constructor.newInstance();

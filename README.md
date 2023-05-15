@@ -39,5 +39,3 @@ To compensate for the individual requirements, internal parts of this library ca
     <version>1.0.0</version>
 </dependency>
 ```
-
-
