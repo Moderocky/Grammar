@@ -157,7 +157,7 @@ public class Grammar {
     /**
      * Constructs an array from a list of marshalled values.
      */
-    private Object constructArray(Class<?> type, Collection<?> list) {
+    protected Object constructArray(Class<?> type, Collection<?> list) {
         //<editor-fold desc="List to Array" defaultstate="collapsed">
         final Class<?> component = type.getComponentType();
         final Object object = Array.newInstance(component, list.size());
