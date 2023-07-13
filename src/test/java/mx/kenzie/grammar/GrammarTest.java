@@ -118,4 +118,16 @@ public class GrammarTest {
         assert test.children[1].a == 1;
     }
 
+    @Test
+    public void noConstructorTest() {
+        final Grammar grammar = new Grammar();
+        class Thing {
+            Thing(Void unused) {
+            }
+        }
+        assert grammar.noSimplexConstructor(Thing.class);
+        final Thing thing = grammar.createObject(Thing.class);
+        assert thing != null;
+    }
+
 }

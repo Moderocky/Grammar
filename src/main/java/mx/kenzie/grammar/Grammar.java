@@ -137,7 +137,7 @@ public class Grammar {
         } else if (expected.isArray() && value instanceof Collection<?> list)
             field.set(source, this.constructArray(expected, list));
         else throw new GrammarException("Value of '" + field.getName() + "' (" + source.getClass()
-                .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
+                    .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
         //</editor-fold>
     }
 
@@ -252,7 +252,7 @@ public class Grammar {
     @SuppressWarnings("unchecked")
     private <Type> Constructor<Type> getConstructor(Class<Type> type) throws NoSuchMethodException {
         if (constructors.containsKey(type)) return (Constructor<Type>) constructors.get(type);
-        if (type.isLocalClass() || type.getEnclosingClass() != null) {
+        if (type.isLocalClass() || type.getEnclosingClass() != null || this.noSimplexConstructor(type)) {
             final Constructor<Type> constructor = this.createConstructor(type);
             assert constructor != null;
             Grammar.constructors.put(type, constructor);
@@ -264,6 +264,13 @@ public class Grammar {
             assert result || constructor.canAccess(null);
             return constructor;
         }
+    }
+
+    protected boolean noSimplexConstructor(Class<?> type) {
+        for (Constructor<?> constructor : type.getDeclaredConstructors()) {
+            if (constructor.getParameterCount() == 0) return false;
+        }
+        return true;
     }
 
     @SuppressWarnings("unchecked")
