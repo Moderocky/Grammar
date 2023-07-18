@@ -126,13 +126,18 @@ public class Grammar {
             this.unmarshal(sub, expected, child);
         } else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
             final Collection replacement;
+            Class<?> expectedElement = Object.class;
+            if (field.getGenericType() instanceof ParameterizedType parameterized) {
+                final Type[] types = parameterized.getActualTypeArguments();
+                if (types.length == 1) expectedElement = (Class<?>) types[0];
+            }
             if (field.get(source) instanceof Collection current) (replacement = current).clear();
             else if (!Modifier.isAbstract(expected.getModifiers()))
                 replacement = (Collection) this.createObject(field.getType());
             else if (Set.class.isAssignableFrom(expected)) replacement = new LinkedHashSet();
             else if (List.class.isAssignableFrom(expected)) replacement = new ArrayList();
             else replacement = new LinkedList();
-            for (Object thing : list) replacement.add(this.construct(thing, Object.class));
+            for (Object thing : list) replacement.add(this.construct(thing, expectedElement));
             field.set(source, replacement);
         } else if (expected.isArray() && value instanceof Collection<?> list)
             field.set(source, this.constructArray(expected, list));
