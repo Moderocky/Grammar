@@ -118,7 +118,6 @@ public class Grammar {
                 else if (expected == float.class) field.setFloat(source, number.floatValue());
             }
         } else if (value == null) field.set(source, null);
-        else if (expected.isAssignableFrom(value.getClass())) field.set(source, value);
         else if (value instanceof Map<?, ?> child) {
             final Object sub, existing = field.get(source);
             if (existing == null) field.set(source, sub = this.createObject(expected));
@@ -126,16 +125,22 @@ public class Grammar {
             this.unmarshal(sub, expected, child);
         } else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
             final Collection replacement;
+            Class<?> expectedElement = Object.class;
+            if (field.getGenericType() instanceof ParameterizedType parameterized) {
+                final Type[] types = parameterized.getActualTypeArguments();
+                if (types.length == 1) expectedElement = (Class<?>) types[0];
+            }
             if (field.get(source) instanceof Collection current) (replacement = current).clear();
             else if (!Modifier.isAbstract(expected.getModifiers()))
                 replacement = (Collection) this.createObject(field.getType());
             else if (Set.class.isAssignableFrom(expected)) replacement = new LinkedHashSet();
             else if (List.class.isAssignableFrom(expected)) replacement = new ArrayList();
             else replacement = new LinkedList();
-            for (Object thing : list) replacement.add(this.construct(thing, Object.class));
+            for (Object thing : list) replacement.add(this.construct(thing, expectedElement));
             field.set(source, replacement);
         } else if (expected.isArray() && value instanceof Collection<?> list)
             field.set(source, this.constructArray(expected, list));
+        else if (expected.isAssignableFrom(value.getClass())) field.set(source, value);
         else throw new GrammarException("Value of '" + field.getName() + "' (" + source.getClass()
                     .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
         //</editor-fold>
