@@ -57,6 +57,29 @@ public class GrammarTest {
     }
 
     @Test
+    public void testParametrizedList() {
+        class Foo {
+            int bar;
+            Foo(int bar) {
+                this.bar = bar;
+            }
+        }
+
+        class Thing {
+            List<Foo> list;
+        }
+
+        final Thing thing = new Thing();
+        thing.list = List.of(new Foo(13), new Foo(37));
+
+        final Grammar grammar = new Grammar();
+        final Map<String, Object> map = grammar.marshal(thing);
+        final Thing result = grammar.unmarshal(Thing.class, map);
+        assert result.list.get(0).bar == 13;
+        assert result.list.get(1).bar == 37;
+    }
+
+    @Test
     public void testShouldSkip() {
         final Grammar grammar = new Grammar();
         assert grammar.shouldSkip(field1);
