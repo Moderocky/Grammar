@@ -105,7 +105,7 @@ public class Grammar {
      * Unmarshalls simple objects into the correct type to be inserted into a field.
      */
     @SuppressWarnings("RawUseOfParameterized")
-    private void prepareFieldValue(Object source, Field field, Class<?> expected, Object value) throws IllegalAccessException {
+    protected void prepareFieldValue(Object source, Field field, Class<?> expected, Object value) throws IllegalAccessException {
         //<editor-fold desc="Set Field Value" defaultstate="collapsed">
         if (expected.isPrimitive()) {
             if (value instanceof Boolean boo) field.setBoolean(source, boo);
@@ -188,7 +188,7 @@ public class Grammar {
     /**
      * Deconstructs a complex object into its marshalled type.
      */
-    private Object deconstruct(Object value, Class<?> component, boolean any) {
+    protected Object deconstruct(Object value, Class<?> component, boolean any) {
         //<editor-fold desc="Complex to Simple" defaultstate="collapsed">
         if (value == null) return null;
         else if (value instanceof String || value instanceof Number || value instanceof Boolean) return value;
@@ -216,7 +216,7 @@ public class Grammar {
         //</editor-fold>
     }
 
-    private void deconstructArray(Object array, Class<?> component, List<Object> list, boolean any) {
+    protected void deconstructArray(Object array, Class<?> component, List<Object> list, boolean any) {
         //<editor-fold desc="Array to List" defaultstate="collapsed">
         if (component.isPrimitive()) {
             if (array instanceof int[] numbers) for (int number : numbers) list.add(number);
@@ -232,25 +232,25 @@ public class Grammar {
         //</editor-fold>
     }
 
-    private String getName(Field field) {
+    protected String getName(Field field) {
         if (field.isAnnotationPresent(Name.class)) return field.getAnnotation(Name.class).value();
         else return field.getName();
     }
 
     @SuppressWarnings("all")
-    private Object createEnum(Class<?> type, Object value) {
+    protected Object createEnum(Class<?> type, Object value) {
         if (value instanceof Number number) return type.getEnumConstants()[number.intValue()];
         return Enum.valueOf((Class) type, value.toString());
     }
 
     @SuppressWarnings("unchecked")
-    private <Type> Constructor<Type> createConstructor(Class<Type> type) throws NoSuchMethodException {
+    protected <Type> Constructor<Type> createConstructor(Class<Type> type) throws NoSuchMethodException {
         final Constructor<?> shift = Object.class.getConstructor();
         return (Constructor<Type>) ReflectionFactory.getReflectionFactory().newConstructorForSerialization(type, shift);
     }
 
     @SuppressWarnings("unchecked")
-    private <Type> Constructor<Type> getConstructor(Class<Type> type) throws NoSuchMethodException {
+    protected  <Type> Constructor<Type> getConstructor(Class<Type> type) throws NoSuchMethodException {
         if (constructors.containsKey(type)) return (Constructor<Type>) constructors.get(type);
         if (type.isLocalClass() || type.getEnclosingClass() != null || this.noSimplexConstructor(type)) {
             final Constructor<Type> constructor = this.createConstructor(type);
