@@ -197,7 +197,7 @@ public class Grammar {
         //<editor-fold desc="Complex to Simple" defaultstate="collapsed">
         if (value == null) return null;
         else if (value instanceof String || value instanceof Number || value instanceof Boolean) return value;
-        else if (value instanceof List<?> list) {
+        else if (value instanceof Collection<?> list) {
             final List<Object> replacement = new ArrayList<>(list.size());
             for (Object object : list)
                 replacement.add(this.deconstruct(object, object == null ? null : object.getClass(), any));
@@ -210,7 +210,8 @@ public class Grammar {
             }
             return replacement;
         }
-        if (value.getClass().isArray()) {
+        if (value.getClass().isEnum()) return ((Enum) value).name();
+        else if (value.getClass().isArray()) {
             final List<Object> list = new ArrayList<>();
             this.deconstructArray(value, component.getComponentType(), list, any);
             return list;
@@ -255,7 +256,7 @@ public class Grammar {
     }
 
     @SuppressWarnings("unchecked")
-    protected  <Type> Constructor<Type> getConstructor(Class<Type> type) throws NoSuchMethodException {
+    protected <Type> Constructor<Type> getConstructor(Class<Type> type) throws NoSuchMethodException {
         if (constructors.containsKey(type)) return (Constructor<Type>) constructors.get(type);
         if (type.isLocalClass() || type.getEnclosingClass() != null || this.noSimplexConstructor(type)) {
             final Constructor<Type> constructor = this.createConstructor(type);
