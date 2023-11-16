@@ -31,6 +31,10 @@ public class Grammar {
     protected <Type, Container extends Map<String, Object>> Container marshal(Object object, Class<Type> type, Container container) {
         //<editor-fold desc="Object to Map" defaultstate="collapsed">
         assert object != null : "Object was null.";
+        if (object instanceof Marshalled marshalled) {
+            container.putAll(marshalled.serialise());
+            return container;
+        }
         final Set<Field> fields = new HashSet<>();
         fields.addAll(List.of(type.getDeclaredFields()));
         fields.addAll(List.of(type.getFields()));
@@ -60,6 +64,10 @@ public class Grammar {
         //<editor-fold desc="Map to Object" defaultstate="collapsed">
         assert object != null : "Object was null.";
         assert !(object instanceof Class<?>) : "Classes cannot be written to.";
+        if (object instanceof Marshalled marshalled) {
+            marshalled.deserialise((Map<String, Object>) container);
+            return object;
+        }
         final Set<Field> fields = new HashSet<>();
         fields.addAll(List.of(type.getDeclaredFields()));
         fields.addAll(List.of(type.getFields()));
