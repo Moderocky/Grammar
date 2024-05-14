@@ -71,31 +71,41 @@ public class GenericTest {
     public void testMarshalComplexRecord() {
         record Foo(int number) {
         }
-        record Thing(String name, Foo foo) {
+        record Bar(int number) {
+        }
+        record Thing(String name, Foo foo, Bar... bars) {
         }
         final Thing thing = new Thing("Jeremy", new Foo(3));
         final Grammar grammar = new Grammar();
         final Map<String, Object> map = grammar.marshal(thing);
         assert map != null;
         assert !map.isEmpty();
-        assert map.size() == 2;
+        assert map.size() == 3;
         assert map.get("name").equals("Jeremy");
         assert map.get("foo") instanceof Map<?, ?> : map.get("foo");
         assert map.get("foo") instanceof Map<?, ?> foo && foo.get("number").equals(3);
+        assert map.get("bars") instanceof List<?> bars && bars.isEmpty();
     }
 
     @Test
     public void testUnmarshalComplexRecord() {
         record Foo(int number) {
         }
-        record Thing(String name, Foo foo) {
+        record Bar(int number) {
+        }
+        record Thing(String name, Foo foo, Bar... bars) {
         }
         final Grammar grammar = new Grammar();
-        final Map<String, Object> map = Map.of("name", "Jeremy", "foo", Map.of("number", -5));
+        final Map<String, Object> map = Map.of("name", "Jeremy", "foo", Map.of("number", -5),
+            "bars", List.of(Map.of("number", 1), Map.of("number", 3)));
         final Thing thing = grammar.unmarshal(Thing.class, map);
         assert thing.name.equals("Jeremy");
         assert thing.foo != null;
         assert thing.foo.number == -5;
+        assert thing.bars != null;
+        assert thing.bars.length == 2;
+        assert thing.bars[0].number == 1;
+        assert thing.bars[1].number == 3;
     }
 
     public enum Blob {
