@@ -73,9 +73,9 @@ public class GenericTest {
         }
         record Bar(int number) {
         }
-        record Thing(String name, Foo foo, Bar... bars) {
+        record Thing(String name, Foo foo, @Name("bars") Bar... array) {
         }
-        final Thing thing = new Thing("Jeremy", new Foo(3));
+        final Thing thing = new Thing("Jeremy", new Foo(3), new Bar(1));
         final Grammar grammar = new Grammar();
         final Map<String, Object> map = grammar.marshal(thing);
         assert map != null;
@@ -83,8 +83,12 @@ public class GenericTest {
         assert map.size() == 3;
         assert map.get("name").equals("Jeremy");
         assert map.get("foo") instanceof Map<?, ?> : map.get("foo");
-        assert map.get("foo") instanceof Map<?, ?> foo && foo.get("number").equals(3);
-        assert map.get("bars") instanceof List<?> bars && bars.isEmpty();
+        assert map.get("foo") instanceof Map<?, ?> foo
+            && foo.get("number").equals(3);
+        assert map.get("bars") instanceof List<?> bars
+            && bars.size() == 1
+            && bars.get(0) instanceof Map<?, ?> bar
+            && bar.get("number").equals(1) : map.get("bars");
     }
 
     @Test
@@ -93,7 +97,7 @@ public class GenericTest {
         }
         record Bar(int number) {
         }
-        record Thing(String name, Foo foo, Bar... bars) {
+        record Thing(String name, Foo foo, @Name("bars") Bar... array) {
         }
         final Grammar grammar = new Grammar();
         final Map<String, Object> map = Map.of("name", "Jeremy", "foo", Map.of("number", -5),
@@ -102,10 +106,10 @@ public class GenericTest {
         assert thing.name.equals("Jeremy");
         assert thing.foo != null;
         assert thing.foo.number == -5;
-        assert thing.bars != null;
-        assert thing.bars.length == 2;
-        assert thing.bars[0].number == 1;
-        assert thing.bars[1].number == 3;
+        assert thing.array != null;
+        assert thing.array.length == 2;
+        assert thing.array[0].number == 1;
+        assert thing.array[1].number == 3;
     }
 
     public enum Blob {

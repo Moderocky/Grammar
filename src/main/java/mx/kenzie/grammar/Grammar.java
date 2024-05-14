@@ -299,9 +299,10 @@ public class Grammar {
         for (int i = 0; i < components.length; i++) {
             final RecordComponent component = components[i];
             final Class<?> type = component.getType();
-            if (type.isPrimitive()) parameters[i] = data.getOrDefault(component.getName(), this.getDefault(type));
+            final String name = this.getName(component, component.getName());
+            if (type.isPrimitive()) parameters[i] = data.getOrDefault(name, this.getDefault(type));
             else {
-                final Object value = data.get(component.getName());
+                final Object value = data.get(name);
                 if (type.isInstance(value)) parameters[i] = value;
                 else parameters[i] = this.construct(value, type);
             }
