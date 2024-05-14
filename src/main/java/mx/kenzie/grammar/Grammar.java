@@ -1,7 +1,9 @@
 package mx.kenzie.grammar;
 
+import org.jetbrains.annotations.NotNull;
 import sun.reflect.ReflectionFactory;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.*;
 import java.util.*;
 
@@ -14,6 +16,7 @@ public class Grammar {
     }
 
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Class<Type> type, Container container) {
+        if (type.isRecord()) return this.createRecord(type, container);
         final Type object = this.createObject(type);
         this.unmarshal(object, type, container);
         return object;
@@ -28,28 +31,143 @@ public class Grammar {
      * Extracts the relevant data from an object's fields into a map of key-value pairs.
      * The {@param container} is returned.
      */
-    protected <Type, Container extends Map<String, Object>> Container marshal(Object object, Class<Type> type, Container container) {
+    protected <Type, Container extends Map<String, Object>> Container marshal(Object object, Class<Type> type,
+                                                                              Container container) {
+        //<editor-fold desc="Getter classes" defaultstate="collapsed">
+        interface Getter extends AnnotatedElement {
+
+            Object get() throws IllegalAccessException, InvocationTargetException;
+
+            int modifiers();
+
+            Class<?> getType();
+
+            String getName();
+
+        }
+        record RecordGetter(RecordComponent component, Method accessor, Object object) implements Getter {
+
+            @Override
+            public Object get() throws IllegalAccessException, InvocationTargetException {
+                return accessor.invoke(object);
+            }
+
+            @Override
+            public boolean isAnnotationPresent(Class<? extends Annotation> annotation) {
+                return component.isAnnotationPresent(annotation);
+            }
+
+            @Override
+            public <T extends Annotation> T getAnnotation(@NotNull Class<T> annotationClass) {
+                return component.getAnnotation(annotationClass);
+            }
+
+            @Override
+            public Annotation[] getAnnotations() {
+                return component.getAnnotations();
+            }
+
+            @Override
+            public Annotation[] getDeclaredAnnotations() {
+                return component.getDeclaredAnnotations();
+            }
+
+            @Override
+            public int modifiers() {
+                return accessor.getModifiers();
+            }
+
+            @Override
+            public Class<?> getType() {
+                return component.getType();
+            }
+
+            @Override
+            public String getName() {
+                return component.getName();
+            }
+
+        }
+        record FieldGetter(Field field, Object object) implements Getter {
+
+            @Override
+            public Object get() throws IllegalAccessException, InvocationTargetException {
+                return field.get(object);
+            }
+
+            @Override
+            public boolean isAnnotationPresent(Class<? extends Annotation> annotation) {
+                return field.isAnnotationPresent(annotation);
+            }
+
+            @Override
+            public <T extends Annotation> T getAnnotation(@NotNull Class<T> annotationClass) {
+                return field.getAnnotation(annotationClass);
+            }
+
+            @Override
+            public Annotation[] getAnnotations() {
+                return field.getAnnotations();
+            }
+
+            @Override
+            public Annotation[] getDeclaredAnnotations() {
+                return field.getDeclaredAnnotations();
+            }
+
+            @Override
+            public int modifiers() {
+                return field.getModifiers();
+            }
+
+            @Override
+            public Class<?> getType() {
+                return field.getType();
+            }
+
+            @Override
+            public String getName() {
+                return field.getName();
+            }
+
+        }
+        //</editor-fold>
         //<editor-fold desc="Object to Map" defaultstate="collapsed">
         assert object != null : "Object was null.";
         if (object instanceof Marshalled marshalled) {
             container.putAll(marshalled.serialise());
             return container;
         }
-        final Set<Field> fields = new HashSet<>();
-        fields.addAll(List.of(type.getDeclaredFields()));
-        fields.addAll(List.of(type.getFields()));
-        for (final Field field : fields) {
-            if (this.shouldSkip(field)) continue;
-            if (!field.canAccess(object)) field.trySetAccessible();
+        final Set<Getter> fields = new HashSet<>();
+        if (type.isRecord()) for (RecordComponent component : type.getRecordComponents()) {
+            final Method accessor = component.getAccessor();
+            if (this.shouldSkip(accessor.getModifiers())) continue;
+            if (!accessor.canAccess(object)) accessor.trySetAccessible();
+            fields.add(new RecordGetter(component, accessor, object));
+        }
+        else {
+            for (Field field : type.getFields()) {
+                if (this.shouldSkip(field)) continue;
+                if (!field.canAccess(object)) field.trySetAccessible();
+                fields.add(new FieldGetter(field, object));
+            }
+            for (Field field : type.getDeclaredFields()) {
+                if (this.shouldSkip(field)) continue;
+                if (!field.canAccess(object)) field.trySetAccessible();
+                fields.add(new FieldGetter(field, object));
+            }
+        }
+        for (final Getter field : fields) {
             try {
-                final Object value = field.get(object);
+                final Object value = field.get();
                 if (value == null && field.isAnnotationPresent(Optional.class)) continue;
                 final Class<?> expected = field.getType();
-                final String key = this.getName(field);
+                final String key = this.getName(field, field.getName());
                 if (key.equals("__data")) continue;
                 container.put(key, this.deconstruct(value, expected, field.isAnnotationPresent(Any.class)));
-            } catch (IllegalAccessException ex) {
-                throw new GrammarException("Unable to read field '" + type.getSimpleName() + '.' + field.getName() + "' from object:", ex);
+            } catch (IllegalAccessException | InvocationTargetException ex) {
+                throw new GrammarException("Unable to read data '" + type.getSimpleName() + '.' + field + "' from " +
+                    "object:", ex);
             }
         }
         return container;
@@ -68,6 +186,7 @@ public class Grammar {
             marshalled.deserialise((Map<String, Object>) container);
             return object;
         }
+        if (type.isRecord()) throw new GrammarException("Data cannot be written to an existing Record object.");
         final Set<Field> fields = new HashSet<>();
         fields.addAll(List.of(type.getDeclaredFields()));
         fields.addAll(List.of(type.getFields()));
@@ -102,7 +221,10 @@ public class Grammar {
      * Whether {@param field} should be skipped when marshalling.
      */
     protected boolean shouldSkip(Field field) {
-        final int modifiers = field.getModifiers();
+        return this.shouldSkip(field.getModifiers());
+    }
+
+    protected boolean shouldSkip(int modifiers) {
         if ((modifiers & 0x00000002) != 0) return true;
         if ((modifiers & 0x00000008) != 0) return true;
         if ((modifiers & 0x00000080) != 0) return true;
@@ -113,7 +235,8 @@ public class Grammar {
      * Unmarshalls simple objects into the correct type to be inserted into a field.
      */
     @SuppressWarnings("RawUseOfParameterized")
-    protected void prepareFieldValue(Object source, Field field, Class<?> expected, Object value) throws IllegalAccessException {
+    protected void prepareFieldValue(Object source, Field field, Class<?> expected, Object value)
+        throws IllegalAccessException {
         //<editor-fold desc="Set Field Value" defaultstate="collapsed">
         if (expected.isPrimitive()) {
             if (value instanceof Boolean boo) field.setBoolean(source, boo);
@@ -150,7 +273,7 @@ public class Grammar {
             field.set(source, this.constructArray(expected, list));
         else if (expected.isAssignableFrom(value.getClass())) field.set(source, value);
         else throw new GrammarException("Value of '" + field.getName() + "' (" + source.getClass()
-                    .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
+                .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
         //</editor-fold>
     }
 
@@ -160,11 +283,61 @@ public class Grammar {
     protected Object construct(Object data, Class<?> expected) {
         if (data == null) return null;
         else if (data instanceof Collection<?> list && expected.isArray()) return this.constructArray(expected, list);
-        else if (data instanceof Map<?, ?> map && !Map.class.isAssignableFrom(expected))
-            return this.unmarshal(this.createObject(expected), expected, map);
-        else if (expected.isEnum()) return this.createEnum(expected, data);
+        else if (data instanceof Map<?, ?> map && !Map.class.isAssignableFrom(expected)) {
+            if (expected.isRecord())
+                return this.createRecord(expected, map);
+            else return this.unmarshal(this.createObject(expected), expected, map);
+        } else if (expected.isEnum()) return this.createEnum(expected, data);
         else if (expected == UUID.class && data instanceof String text) return UUID.fromString(text);
         else return data;
+    }
+
+    @SuppressWarnings({"unchecked", "TypeParameterHidesVisibleType"})
+    private <Type> Type createRecord(Class<Type> expected, @SuppressWarnings("rawtypes") Map data) {
+        final RecordComponent[] components = expected.getRecordComponents();
+        final Object[] parameters = new Object[components.length];
+        for (int i = 0; i < components.length; i++) {
+            final RecordComponent component = components[i];
+            final Class<?> type = component.getType();
+            if (type.isPrimitive()) parameters[i] = data.getOrDefault(component.getName(), this.getDefault(type));
+            else {
+                final Object value = data.get(component.getName());
+                if (type.isInstance(value)) parameters[i] = value;
+                else parameters[i] = this.construct(value, type);
+            }
+        }
+        final Constructor<Type> constructor = this.getCanonicalConstructor(expected);
+        try {
+            if (!constructor.canAccess(null)) constructor.trySetAccessible();
+        } catch (SecurityException ignored) {}
+        try {
+            return constructor.newInstance(parameters);
+        } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+            throw new GrammarException(e);
+        }
+    }
+
+    private Object getDefault(Class<?> type) {
+        if (type == byte.class) return (byte) 0;
+        if (type == short.class) return (short) 0;
+        if (type == int.class) return 0;
+        if (type == long.class) return 0L;
+        if (type == float.class) return 0.0F;
+        if (type == double.class) return 0.0;
+        if (type == boolean.class) return false;
+        if (type == char.class) return (char) 0;
+        return null;
+    }
+
+    private <Type> Constructor<Type> getCanonicalConstructor(Class<Type> record) {
+        Class<?>[] componentTypes = Arrays.stream(record.getRecordComponents())
+            .map(RecordComponent::getType)
+            .toArray(Class<?>[]::new);
+        try {
+            return record.getDeclaredConstructor(componentTypes);
+        } catch (NoSuchMethodException e) {
+            throw new GrammarException("Record's canonical constructor was missing.", e);
+        }
     }
 
     /**
@@ -214,7 +387,8 @@ public class Grammar {
             final Map<String, Object> replacement = new LinkedHashMap<>(map.size());
             for (Map.Entry<?, ?> entry : map.entrySet()) {
                 final Object object = entry.getValue();
-                replacement.put(String.valueOf(entry.getKey()), this.deconstruct(entry.getValue(), object == null ? null : object.getClass(), any));
+                replacement.put(String.valueOf(entry.getKey()), this.deconstruct(entry.getValue(), object == null ?
+                    null : object.getClass(), any));
             }
             return replacement;
         }
@@ -249,6 +423,11 @@ public class Grammar {
     protected String getName(Field field) {
         if (field.isAnnotationPresent(Name.class)) return field.getAnnotation(Name.class).value();
         else return field.getName();
+    }
+
+    protected String getName(AnnotatedElement field, String name) {
+        if (field.isAnnotationPresent(Name.class)) return field.getAnnotation(Name.class).value();
+        else return name;
     }
 
     @SuppressWarnings("all")

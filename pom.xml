@@ -6,9 +6,9 @@
 
     <groupId>mx.kenzie</groupId>
     <artifactId>grammar</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
     <name>Grammar</name>
-    <description>Standard resources for building an object notation.</description>
+    <description>Standard resources for building an object notation serialiser.</description>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
