@@ -7,6 +7,7 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.*;
 import java.util.*;
 
+@SuppressWarnings("TypeParameterHidesVisibleType")
 public class Grammar {
 
     private static final Map<Class<?>, Constructor<?>> constructors = new WeakHashMap<>();
@@ -22,6 +23,14 @@ public class Grammar {
         return object;
     }
 
+    /**
+     *
+     * @param object
+     * @param container
+     * @return
+     * @param <Type>
+     * @param <Container>
+     */
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Container container) {
         this.unmarshal(object, object.getClass(), container);
         return object;
@@ -30,9 +39,16 @@ public class Grammar {
     /**
      * Extracts the relevant data from an object's fields into a map of key-value pairs.
      * The {@param container} is returned.
+     *
+     * @param object The object whose data is to be marshalled
+     * @param type The type to use for data extraction (a supertype of {@param object})
+     * @param container The container in which to store the data
+     * @return The {@param container} with the data added
+     * @param <Type> The type to marshal the object as
+     * @param <Container> The container type
      */
-    protected <Type, Container extends Map<String, Object>> Container marshal(Object object, Class<Type> type,
-                                                                              Container container) {
+    protected <Type, Container extends Map<String, Object>>
+    Container marshal(Object object, Class<Type> type, Container container) {
         //<editor-fold desc="Getter classes" defaultstate="collapsed">
         interface Getter extends AnnotatedElement {
 
@@ -53,7 +69,7 @@ public class Grammar {
             }
 
             @Override
-            public boolean isAnnotationPresent(Class<? extends Annotation> annotation) {
+            public boolean isAnnotationPresent(@NotNull Class<? extends Annotation> annotation) {
                 return component.isAnnotationPresent(annotation);
             }
 
@@ -96,7 +112,7 @@ public class Grammar {
             }
 
             @Override
-            public boolean isAnnotationPresent(Class<? extends Annotation> annotation) {
+            public boolean isAnnotationPresent(@NotNull Class<? extends Annotation> annotation) {
                 return field.isAnnotationPresent(annotation);
             }
 
