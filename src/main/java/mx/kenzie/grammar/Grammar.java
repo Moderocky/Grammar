@@ -1,5 +1,6 @@
 package mx.kenzie.grammar;
 
+import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import sun.reflect.ReflectionFactory;
 
@@ -16,6 +17,17 @@ public class Grammar {
         return this.marshal(object, object.getClass(), new LinkedHashMap<>());
     }
 
+    /**
+     * Creates an object, and inserts data from a map of key-value pairs into an object's fields.
+     * The {@param object} is returned.
+     *
+     * @param type The type to use for object construction
+     * @param container The container from which to read the data
+     * @return The new object
+     * @param <Type> The object's type
+     * @param <Container> The container type
+     */
+    @Contract("null, null -> fail")
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Class<Type> type, Container container) {
         if (type.isRecord()) return this.createRecord(type, container);
         final Type object = this.createObject(type);
@@ -24,13 +36,16 @@ public class Grammar {
     }
 
     /**
+     * Inserts data from a map of key-value pairs into an object's fields.
+     * The {@param object} is returned.
      *
-     * @param object
-     * @param container
-     * @return
-     * @param <Type>
-     * @param <Container>
+     * @param object The object whose data is to be overwritten
+     * @param container The container from which to read the data
+     * @return The object, having been written to
+     * @param <Type> The object's type
+     * @param <Container> The container type
      */
+    @Contract("null, null -> fail; _, _ -> param1")
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Container container) {
         this.unmarshal(object, object.getClass(), container);
         return object;
@@ -47,6 +62,7 @@ public class Grammar {
      * @param <Type> The type to marshal the object as
      * @param <Container> The container type
      */
+    @Contract("null, null, null -> fail; _, _, _ -> param3")
     protected <Type, Container extends Map<String, Object>>
     Container marshal(Object object, Class<Type> type, Container container) {
         //<editor-fold desc="Getter classes" defaultstate="collapsed">
@@ -192,8 +208,17 @@ public class Grammar {
 
     /**
      * Inserts data from a map of key-value pairs into an object's fields.
-     * The {@param container} is returned.
+     * The {@param object} is returned.
+     *
+     * @param object The object whose data is to be overwritten
+     * @param type The type to use for data injection (a supertype of {@param object})
+     * @param container The container from which to read the data
+     * @return The object, having been written to
+     * @param <Type> The object's type
+     * @param <Container> The container type
      */
+    @Contract("null, null, null -> fail; _, _, _ -> param1")
+    @SuppressWarnings("unchecked")
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Class<?> type, Container container) {
         //<editor-fold desc="Map to Object" defaultstate="collapsed">
         assert object != null : "Object was null.";
@@ -283,7 +308,8 @@ public class Grammar {
             else if (Set.class.isAssignableFrom(expected)) replacement = new LinkedHashSet();
             else if (List.class.isAssignableFrom(expected)) replacement = new ArrayList();
             else replacement = new LinkedList();
-            for (Object thing : list) replacement.add(this.construct(thing, expectedElement));
+            for (Object thing : list) //noinspection unchecked
+                replacement.add(this.construct(thing, expectedElement));
             field.set(source, replacement);
         } else if (expected.isArray() && value instanceof Collection<?> list)
             field.set(source, this.constructArray(expected, list));
