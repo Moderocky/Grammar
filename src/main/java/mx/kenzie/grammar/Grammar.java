@@ -13,6 +13,12 @@ public class Grammar {
 
     private static final Map<Class<?>, Constructor<?>> constructors = new WeakHashMap<>();
 
+    /**
+     * Extracts the relevant data from an object's fields into a map of key-value pairs.
+     *
+     * @param object The object whose data should be unwrapped
+     * @return A map containing the data
+     */
     protected Map<String, Object> marshal(Object object) {
         return this.marshal(object, object.getClass(), new LinkedHashMap<>());
     }
