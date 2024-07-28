@@ -153,4 +153,43 @@ public class GrammarTest {
         assert thing != null;
     }
 
+    @Test
+    public void testAnyType() {
+        class Bean {
+            String name = "foo";
+        }
+        class Thing {
+            @Any({int.class, String.class, Bean.class}) Object value;
+        }
+        final Grammar grammar = new Grammar();
+        {
+            final Map<String, Object> map = Map.of("value", 10);
+            final Thing result = grammar.unmarshal(new Thing(), map);
+            assert result.value != null;
+            assert result.value instanceof Integer integer
+                && integer == 10;
+        }
+        {
+            final Map<String, Object> map = Map.of("value", "foo");
+            final Thing result = grammar.unmarshal(new Thing(), map);
+            assert result.value != null;
+            assert result.value instanceof String string
+                && string.equals("foo");
+        }
+        {
+            final Map<String, Object> map = Map.of("value", Map.of("name", "blob"));
+            final Thing result = grammar.unmarshal(new Thing(), map);
+            assert result.value != null;
+            assert result.value instanceof Bean bean
+                && bean.name != null && bean.name.equals("blob");
+        }
+        {
+            final Map<String, Object> map = Map.of("value", Map.of());
+            final Thing result = grammar.unmarshal(new Thing(), map);
+            assert result.value != null;
+            assert result.value instanceof Bean bean
+                && bean.name == null;
+        }
+    }
+
 }

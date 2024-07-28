@@ -8,7 +8,7 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.*;
 import java.util.*;
 
-@SuppressWarnings("TypeParameterHidesVisibleType")
+@SuppressWarnings({"TypeParameterHidesVisibleType", "rawtypes", "unchecked"})
 public class Grammar {
 
     private static final Map<Class<?>, Constructor<?>> constructors = new WeakHashMap<>();
@@ -27,11 +27,11 @@ public class Grammar {
      * Creates an object, and inserts data from a map of key-value pairs into an object's fields.
      * The {@param object} is returned.
      *
-     * @param type The type to use for object construction
-     * @param container The container from which to read the data
-     * @return The new object
-     * @param <Type> The object's type
+     * @param type        The type to use for object construction
+     * @param container   The container from which to read the data
+     * @param <Type>      The object's type
      * @param <Container> The container type
+     * @return The new object
      */
     @Contract("null, null -> fail")
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Class<Type> type, Container container) {
@@ -45,11 +45,11 @@ public class Grammar {
      * Inserts data from a map of key-value pairs into an object's fields.
      * The {@param object} is returned.
      *
-     * @param object The object whose data is to be overwritten
-     * @param container The container from which to read the data
-     * @return The object, having been written to
-     * @param <Type> The object's type
+     * @param object      The object whose data is to be overwritten
+     * @param container   The container from which to read the data
+     * @param <Type>      The object's type
      * @param <Container> The container type
+     * @return The object, having been written to
      */
     @Contract("null, null -> fail; _, _ -> param1")
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Container container) {
@@ -61,12 +61,12 @@ public class Grammar {
      * Extracts the relevant data from an object's fields into a map of key-value pairs.
      * The {@param container} is returned.
      *
-     * @param object The object whose data is to be marshalled
-     * @param type The type to use for data extraction (a supertype of {@param object})
-     * @param container The container in which to store the data
-     * @return The {@param container} with the data added
-     * @param <Type> The type to marshal the object as
+     * @param object      The object whose data is to be marshalled
+     * @param type        The type to use for data extraction (a supertype of {@param object})
+     * @param container   The container in which to store the data
+     * @param <Type>      The type to marshal the object as
      * @param <Container> The container type
+     * @return The {@param container} with the data added
      */
     @Contract("null, null, null -> fail; _, _, _ -> param3")
     protected <Type, Container extends Map<String, Object>>
@@ -216,12 +216,12 @@ public class Grammar {
      * Inserts data from a map of key-value pairs into an object's fields.
      * The {@param object} is returned.
      *
-     * @param object The object whose data is to be overwritten
-     * @param type The type to use for data injection (a supertype of {@param object})
-     * @param container The container from which to read the data
-     * @return The object, having been written to
-     * @param <Type> The object's type
+     * @param object      The object whose data is to be overwritten
+     * @param type        The type to use for data injection (a supertype of {@param object})
+     * @param container   The container from which to read the data
+     * @param <Type>      The object's type
      * @param <Container> The container type
+     * @return The object, having been written to
      */
     @Contract("null, null, null -> fail; _, _, _ -> param1")
     @SuppressWarnings("unchecked")
@@ -252,10 +252,16 @@ public class Grammar {
             if (this.shouldSkip(field)) continue;
             if (!container.containsKey(key)) continue;
             if (!field.canAccess(object)) field.trySetAccessible();
+            final Any any = field.getAnnotation(Any.class);
             final Object value = container.get(key);
-            final Class<?> expected = field.getType();
+            final Class<?> expected;
+            if (any != null && any.value().length > 0) expected = this.getBestMatch(field.getType(), any, value);
+            else expected = field.getType();
             try {
-                this.prepareFieldValue(object, field, expected, this.construct(value, expected));
+                final Object existing = field.get(object);
+                if (existing != null && value instanceof Map map)
+                    this.unmarshal(existing, existing.getClass(), map);
+                else this.prepareFieldValue(object, field, expected, this.construct(value, expected));
             } catch (Throwable ex) {
                 throw new GrammarException("Unable to write to object:", ex);
             }
@@ -278,6 +284,88 @@ public class Grammar {
         return (modifiers & 0x00001000) != 0;
     }
 
+    private void setPrimitiveField(Field field, Object source, Class<?> expected, Object value)
+        throws IllegalAccessException {
+        //<editor-fold desc="Sets a field to a primitive value." defaultstate="collapsed">
+        if (expected == boolean.class && value instanceof Boolean boo) field.set(source, boo);
+        else if (value instanceof Number number) {
+            if (expected == byte.class) field.set(source, number.byteValue());
+            else if (expected == short.class) field.set(source, number.shortValue());
+            else if (expected == int.class) field.set(source, number.intValue());
+            else if (expected == long.class) field.set(source, number.longValue());
+            else if (expected == double.class) field.set(source, number.doubleValue());
+            else if (expected == float.class) field.set(source, number.floatValue());
+        } else if (value == null) {
+            if (expected == boolean.class) field.set(source, false);
+            else field.set(source, 0);
+        } else throw new UnmarshallingException("Could not set field '" + field.getName()
+            + "' (as " + expected.getSimpleName() + ") to '"
+            + value + "' (" + value.getClass() + ").");
+        //</editor-fold>
+    }
+
+    /**
+     * Scores a class based on how closely it matches the assigned data.
+     */
+    private float score(Class<?> type, Map<String, Object> map) {
+        //<editor-fold desc="Scores how closely the type reflects the data map." defaultstate="collapsed">
+        if (type.isPrimitive() || type == String.class) return -100F;
+        final Set<String> fields = new HashSet<>(), required = new HashSet<>();
+        for (Field field : type.getFields()) {
+            if (this.shouldSkip(field.getModifiers())) continue;
+            fields.add(this.getName(field));
+            if (field.isAnnotationPresent(Optional.class)) continue;
+            required.add(this.getName(field));
+        }
+        for (Field field : type.getDeclaredFields()) {
+            if (this.shouldSkip(field.getModifiers())) continue;
+            fields.add(this.getName(field));
+            if (field.isAnnotationPresent(Optional.class)) continue;
+            required.add(this.getName(field));
+        }
+        float score = 0;
+        for (String string : map.keySet()) {
+            if (string == null || string.startsWith("__")) continue;
+            if (fields.contains(string)) score += 0.8F;
+            else score -= 0.8F;
+        }
+        for (String string : required) {
+            if (!map.containsKey(string)) score -= 1.2F;
+        }
+        return score;
+        //</editor-fold>
+    }
+
+    /**
+     * Finds the closest unmarshalling match for data.
+     */
+    private Class<?> getBestMatch(Class<?> alternative, Any any, Object value) {
+        //<editor-fold desc="Handle primitive types." defaultstate="collapsed">
+        if (value == null) {
+            if (alternative.isPrimitive()) { // to find correct default value, e.g. false, 0
+                for (Class<?> type : any.value()) if (type.isPrimitive()) return type;
+                for (Class<?> type : any.value()) if (Number.class.isAssignableFrom(type)) return type;
+                return alternative;
+            }
+            return alternative;
+        }
+        if (value instanceof Boolean) return boolean.class;
+        if (value instanceof Number) {
+            for (Class<?> type : any.value()) if (type.isPrimitive() && type != boolean.class) return type;
+            if (alternative.isPrimitive()) return alternative;
+            for (Class<?> type : any.value()) if (type.isInstance(value)) return type;
+            return alternative;
+        }
+        //</editor-fold>
+        if (value instanceof CharSequence) return alternative;
+        if (value instanceof Map child) {
+            final Class<?>[] types = Arrays.copyOf(any.value(), any.value().length);
+            Arrays.sort(types, 0, types.length, Comparator.comparing(c -> this.score(c, child)));
+            return types[types.length - 1];
+        }
+        return alternative;
+    }
+
     /**
      * Unmarshalls simple objects into the correct type to be inserted into a field.
      */
@@ -285,44 +373,52 @@ public class Grammar {
     protected void prepareFieldValue(Object source, Field field, Class<?> expected, Object value)
         throws IllegalAccessException {
         //<editor-fold desc="Set Field Value" defaultstate="collapsed">
-        if (expected.isPrimitive()) {
-            if (value instanceof Boolean boo) field.setBoolean(source, boo);
-            else if (value instanceof Number number) {
-                if (expected == byte.class) field.setByte(source, number.byteValue());
-                else if (expected == short.class) field.setShort(source, number.shortValue());
-                else if (expected == int.class) field.setInt(source, number.intValue());
-                else if (expected == long.class) field.setLong(source, number.longValue());
-                else if (expected == double.class) field.setDouble(source, number.doubleValue());
-                else if (expected == float.class) field.setFloat(source, number.floatValue());
-            }
-        } else if (value == null) field.set(source, null);
+        if (expected.isPrimitive()) this.setPrimitiveField(field, source, expected, value);
+        else if (value == null) field.set(source, null);
+        else if (value instanceof CharSequence sequence && expected == String.class)
+            field.set(source, sequence.toString());
         else if (value instanceof Map<?, ?> child) {
             final Object sub, existing = field.get(source);
             if (existing == null) field.set(source, sub = this.createObject(expected));
             else sub = existing;
             this.unmarshal(sub, expected, child);
         } else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
-            final Collection replacement;
-            Class<?> expectedElement = Object.class;
-            if (field.getGenericType() instanceof ParameterizedType parameterized) {
-                final Type[] types = parameterized.getActualTypeArguments();
-                if (types.length == 1) expectedElement = (Class<?>) types[0];
-            }
-            if (field.get(source) instanceof Collection current) (replacement = current).clear();
-            else if (!Modifier.isAbstract(expected.getModifiers()))
-                replacement = (Collection) this.createObject(field.getType());
-            else if (Set.class.isAssignableFrom(expected)) replacement = new LinkedHashSet();
-            else if (List.class.isAssignableFrom(expected)) replacement = new ArrayList();
-            else replacement = new LinkedList();
-            for (Object thing : list) //noinspection unchecked
-                replacement.add(this.construct(thing, expectedElement));
+            final Collection replacement = this.makeCollection(source, field, expected, list);
             field.set(source, replacement);
-        } else if (expected.isArray() && value instanceof Collection<?> list)
-            field.set(source, this.constructArray(expected, list));
-        else if (expected.isAssignableFrom(value.getClass())) field.set(source, value);
+        } else if (expected.isArray() && value instanceof Collection<?> list) {
+            final Any any = field.getAnnotation(Any.class);
+            if (any != null && any.value().length > 0) field.set(source, this.constructArray(expected, any, list));
+            else field.set(source, this.constructArray(expected, list));
+        } else if (expected.isAssignableFrom(value.getClass()) || expected.isInstance(value)) field.set(source, value);
         else throw new GrammarException("Value of '" + field.getName() + "' (" + source.getClass()
                 .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
         //</editor-fold>
+    }
+
+    private Collection makeCollection(Object source, Field field, Class<?> expected, Collection<?> list)
+        throws IllegalAccessException {
+        final Collection replacement;
+        //<editor-fold desc="Constructs and unmarshalls the data collection." defaultstate="collapsed">
+        final Any any = field.getAnnotation(Any.class);
+        Class<?> expectedElement = Object.class;
+        if (field.getGenericType() instanceof ParameterizedType parameterized) {
+            final Type[] types = parameterized.getActualTypeArguments();
+            if (types.length == 1) expectedElement = (Class<?>) types[0];
+        }
+        if (field.get(source) instanceof Collection current) (replacement = current).clear();
+        else if (!Modifier.isAbstract(expected.getModifiers()))
+            replacement = (Collection) this.createObject(field.getType());
+        else if (Set.class.isAssignableFrom(expected)) replacement = new LinkedHashSet();
+        else if (List.class.isAssignableFrom(expected)) replacement = new ArrayList();
+        else replacement = new LinkedList();
+        if (any != null && any.value().length > 0) for (Object thing : list) {
+            final Class<?> bestMatch = this.getBestMatch(expectedElement, any, thing);
+            replacement.add(this.construct(thing, bestMatch));
+        }
+        else for (Object thing : list) //noinspection unchecked
+            replacement.add(this.construct(thing, expectedElement));
+        //</editor-fold>
+        return replacement;
     }
 
     /**
@@ -330,6 +426,8 @@ public class Grammar {
      */
     protected Object construct(Object data, Class<?> expected) {
         if (data == null) return null;
+        else if (expected.isPrimitive()) return data;
+        else if (expected == String.class && data instanceof CharSequence sequence) return sequence.toString();
         else if (data instanceof Collection<?> list && expected.isArray()) return this.constructArray(expected, list);
         else if (data instanceof Map<?, ?> map && !Map.class.isAssignableFrom(expected)) {
             if (expected.isRecord())
@@ -342,11 +440,15 @@ public class Grammar {
 
     @SuppressWarnings({"unchecked", "TypeParameterHidesVisibleType"})
     private <Type> Type createRecord(Class<Type> expected, @SuppressWarnings("rawtypes") Map data) {
+        //<editor-fold desc="Creates a record from its component data." defaultstate="collapsed">
         final RecordComponent[] components = expected.getRecordComponents();
         final Object[] parameters = new Object[components.length];
         for (int i = 0; i < components.length; i++) {
             final RecordComponent component = components[i];
-            final Class<?> type = component.getType();
+            final Any any = component.getAnnotation(Any.class);
+            final Class<?> type;
+            if (any != null && any.value().length > 0) type = this.getBestMatch(component.getType(), any, data);
+            else type = component.getType();
             final String name = this.getName(component, component.getName());
             if (type.isPrimitive()) parameters[i] = data.getOrDefault(name, this.getDefault(type));
             else {
@@ -364,6 +466,7 @@ public class Grammar {
         } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
             throw new GrammarException(e);
         }
+        //</editor-fold>
     }
 
     private Object getDefault(Class<?> type) {
@@ -415,6 +518,24 @@ public class Grammar {
         else {
             final Object[] array = (Object[]) object;
             for (int i = 0; i < objects.length; i++) array[i] = this.construct(objects[i], component);
+        }
+        return object;
+        //</editor-fold>
+    }
+
+    protected Object constructArray(Class<?> type, Any any, Collection<?> list) {
+        //<editor-fold desc="List to Array" defaultstate="collapsed">
+        final Class<?> component = type.getComponentType();
+        final Object object = Array.newInstance(component, list.size());
+        final Object[] objects = list.toArray();
+        if (component.isEnum()) for (int i = 0; i < objects.length; i++)
+            Array.set(object, i, this.createEnum(component, objects[i]));
+        else if (component == UUID.class) for (int i = 0; i < objects.length; i++)
+            Array.set(object, i, UUID.fromString(objects[i].toString()));
+        else {
+            final Object[] array = (Object[]) object;
+            for (int i = 0; i < objects.length; i++)
+                array[i] = this.construct(objects[i], this.getBestMatch(component, any, object));
         }
         return object;
         //</editor-fold>
