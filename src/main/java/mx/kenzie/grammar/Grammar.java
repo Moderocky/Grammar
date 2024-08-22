@@ -35,6 +35,8 @@ public class Grammar {
      */
     @Contract("null, null -> fail")
     protected <Type, Container extends Map<?, ?>> Type unmarshal(Class<Type> type, Container container) {
+        if (type.isInterface()) throw new GrammarException("Cannot create an interface " + type);
+        if (Modifier.isAbstract(type.getModifiers())) throw new GrammarException("Cannot create an abstract " + type);
         if (type.isRecord()) return this.createRecord(type, container);
         final Type object = this.createObject(type);
         this.unmarshal(object, type, container);
@@ -377,12 +379,13 @@ public class Grammar {
         else if (value == null) field.set(source, null);
         else if (value instanceof CharSequence sequence && expected == String.class)
             field.set(source, sequence.toString());
-        else if (value instanceof Map<?, ?> child) {
-            final Object sub, existing = field.get(source);
-            if (existing == null) field.set(source, sub = this.createObject(expected));
-            else sub = existing;
-            this.unmarshal(sub, expected, child);
-        } else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
+//        else if (value instanceof Map<?, ?> child) {
+//            final Object sub, existing = field.get(source);
+//            if (existing == null) field.set(source, sub = this.createObject(expected));
+//            else sub = existing;
+//            this.unmarshal(sub, expected, child);
+//        }
+        else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
             final Collection replacement = this.makeCollection(source, field, expected, list);
             field.set(source, replacement);
         } else if (expected.isArray() && value instanceof Collection<?> list) {
@@ -639,6 +642,7 @@ public class Grammar {
     @SuppressWarnings("unchecked")
     protected <Type> Type createObject(Class<Type> type) {
         if (type.isArray()) return (Type) Array.newInstance(type, 0);
+        if (type.isInterface()) throw new GrammarException("Unable to create an interface: " + type.getSimpleName());
         try {
             final Constructor<Type> constructor = this.getConstructor(type);
             return constructor.newInstance();

@@ -192,4 +192,24 @@ public class GrammarTest {
         }
     }
 
+    @Test
+    public void testPrimitiveArray() {
+        class Thing {
+            public double[] foo = new double[3];
+        }
+        class Thing2 {
+            public Thing thing;
+        }
+        final Grammar grammar = new Grammar();
+        {
+            final Map<String, Object> map = Map.of("thing", Map.of("foo", List.of(0.5, 1.0)));
+            final Thing2 result = grammar.unmarshal(new Thing2(), map);
+            assert result.thing != null;
+            assert result.thing.foo != null;
+            assert result.thing.foo[0] == 0.5
+                && result.thing.foo[1] == 1.0;
+        }
+
+    }
+
 }
