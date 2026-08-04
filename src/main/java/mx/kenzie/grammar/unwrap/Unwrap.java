@@ -1,17 +1,18 @@
-package mx.kenzie.grammar;
+package mx.kenzie.grammar.unwrap;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/**
- * Marks a field that should be marshalled with a key different from its field name.
- */
 @Retention(RetentionPolicy.RUNTIME)
 @Target({ElementType.FIELD, ElementType.RECORD_COMPONENT})
-public @interface Name {
+public @interface Unwrap {
+    boolean value() default true;
 
-    String value();
+    String name() default "";
 
+    Class<?> marshalAs() default void.class;
+
+    Class<?> componentType() default void.class;
 }

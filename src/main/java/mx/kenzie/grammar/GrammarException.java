@@ -17,30 +17,56 @@ public class GrammarException extends RuntimeException {
         super(cause);
     }
 
-    protected GrammarException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
-        super(message, cause, enableSuppression, writableStackTrace);
-    }
-}
-class UnmarshallingException extends GrammarException {
 
-    public UnmarshallingException() {
-        super();
-    }
+    public static class NoUnmarshallingStrategy extends StrategyException {
 
-    public UnmarshallingException(String message) {
-        super(message);
+        public NoUnmarshallingStrategy(String message) {
+            super(message);
+        }
+
     }
 
-    public UnmarshallingException(String message, Throwable cause) {
-        super(message, cause);
+
+    public static class NoMarshallingStrategy extends StrategyException {
+
+        public NoMarshallingStrategy(String message) {
+            super(message);
+        }
+
     }
 
-    public UnmarshallingException(Throwable cause) {
-        super(cause);
+    public static class UnmarshallingException extends GrammarException {
+
+        public UnmarshallingException(String message) {
+            super(message);
+        }
+
+        public UnmarshallingException(String message, Throwable cause) {
+            super(message, cause);
+        }
+
+        public UnmarshallingException(Throwable cause) {
+            super(cause);
+        }
+
     }
 
-    protected UnmarshallingException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
-        super(message, cause, enableSuppression, writableStackTrace);
+    public static class StrategyException extends GrammarException {
+
+        public StrategyException() {
+        }
+
+        public StrategyException(String message, Throwable cause) {
+            super(message, cause);
+        }
+
+        public StrategyException(String message) {
+            super(message);
+        }
     }
 
+    public static class ReadingException extends GrammarException {
+        public ReadingException(String message) {
+        }
+    }
 }

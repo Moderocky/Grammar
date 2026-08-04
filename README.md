@@ -36,6 +36,6 @@ To compensate for the individual requirements, internal parts of this library ca
 <dependency>
     <groupId>mx.kenzie</groupId>
     <artifactId>grammar</artifactId>
-    <version>1.0.0</version>
+    <version>2.0.0</version>
 </dependency>
 ```

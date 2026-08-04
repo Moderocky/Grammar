@@ -1,655 +1,509 @@
 package mx.kenzie.grammar;
 
-import org.jetbrains.annotations.Contract;
+import mx.kenzie.grail.function.Function;
+import mx.kenzie.grail.function.Supplier;
+import mx.kenzie.grammar.unwrap.*;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import sun.reflect.ReflectionFactory;
 
-import java.lang.annotation.Annotation;
-import java.lang.reflect.*;
+import java.lang.constant.Constable;
+import java.lang.constant.ConstantDesc;
+import java.lang.reflect.Array;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InaccessibleObjectException;
+import java.lang.reflect.Modifier;
 import java.util.*;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
-@SuppressWarnings({"TypeParameterHidesVisibleType", "rawtypes", "unchecked"})
 public class Grammar {
 
-    private static final Map<Class<?>, Constructor<?>> constructors = new WeakHashMap<>();
+    private static final Constructor<?> rootOfAll = Supplier.get(Object.class::getConstructor, Error::new);
+    protected final Grammar parent;
+    protected Map<Class<?>, Function<?, Constable, GrammarException>> marshallingStrategiesByClass;
+    protected Deque<PredicatedMarshallingStrategy<Object, ?>> marshallingStrategies;
+    protected Map<Class<?>, Function<Constable, ?, GrammarException>> unmarshallingStrategies;
+    protected Map<Class<?>, Supplier<?, GrammarException>> creatorFunctions;
 
-    /**
-     * Extracts the relevant data from an object's fields into a map of key-value pairs.
-     *
-     * @param object The object whose data should be unwrapped
-     * @return A map containing the data
-     */
-    protected Map<String, Object> marshal(Object object) {
-        return this.marshal(object, object.getClass(), new LinkedHashMap<>());
+    /// Creates a grammar with an inheritance system.
+    /// Falls back to relying on the parent's registered strategies.
+    ///
+    /// This can be used to create global inheritance patterns, i.e. a central grammar system
+    /// with common types registered, and local extenders with special situational types.
+    protected Grammar(Grammar parent) {
+        this.parent = parent;
+        this.marshallingStrategies = new LinkedList<>();
+        // These maps are weak to allow class unloading for anonymous types
+        this.marshallingStrategiesByClass = new WeakHashMap<>();
+        this.unmarshallingStrategies = new WeakHashMap<>();
+        this.creatorFunctions = new WeakHashMap<>();
+        this.registerMarshallingStrategy(String.class, Function.identity());
+        this.registerUnmarshallingStrategy(String.class, Function.identity());
     }
 
-    /**
-     * Creates an object, and inserts data from a map of key-value pairs into an object's fields.
-     * The {@param object} is returned.
-     *
-     * @param type        The type to use for object construction
-     * @param container   The container from which to read the data
-     * @param <Type>      The object's type
-     * @param <Container> The container type
-     * @return The new object
-     */
-    @Contract("null, null -> fail")
-    protected <Type, Container extends Map<?, ?>> Type unmarshal(Class<Type> type, Container container) {
-        if (type.isInterface()) throw new GrammarException("Cannot create an interface " + type);
-        if (Modifier.isAbstract(type.getModifiers())) throw new GrammarException("Cannot create an abstract " + type);
-        if (type.isRecord()) return this.createRecord(type, container);
-        final Type object = this.createObject(type);
-        this.unmarshal(object, type, container);
-        return object;
+    protected Grammar() {
+        this(null);
     }
 
-    /**
-     * Inserts data from a map of key-value pairs into an object's fields.
-     * The {@param object} is returned.
-     *
-     * @param object      The object whose data is to be overwritten
-     * @param container   The container from which to read the data
-     * @param <Type>      The object's type
-     * @param <Container> The container type
-     * @return The object, having been written to
-     */
-    @Contract("null, null -> fail; _, _ -> param1")
-    protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Container container) {
-        this.unmarshal(object, object.getClass(), container);
-        return object;
+    public static Container assertIsContainer(Object constant) {
+        if (constant instanceof Container container) return container;
+        throw new GrammarException.UnmarshallingException("Expected a primitive data container but found " + constant);
     }
 
-    /**
-     * Extracts the relevant data from an object's fields into a map of key-value pairs.
-     * The {@param container} is returned.
-     *
-     * @param object      The object whose data is to be marshalled
-     * @param type        The type to use for data extraction (a supertype of {@param object})
-     * @param container   The container in which to store the data
-     * @param <Type>      The type to marshal the object as
-     * @param <Container> The container type
-     * @return The {@param container} with the data added
-     */
-    @Contract("null, null, null -> fail; _, _, _ -> param3")
-    protected <Type, Container extends Map<String, Object>>
-    Container marshal(Object object, Class<Type> type, Container container) {
-        //<editor-fold desc="Getter classes" defaultstate="collapsed">
-        interface Getter extends AnnotatedElement {
+    public static Collection<Constable> assertIsSeries(Object constant) {
+        if (constant instanceof Collection<?> container)
+            //noinspection unchecked
+            return (Collection<Constable>) container;
+        throw new GrammarException.UnmarshallingException("Expected a primitive data series but found " + constant);
+    }
 
-            Object get() throws IllegalAccessException, InvocationTargetException;
+    /// Registers a no-arguments constructor (or similar provider function) for a serialisable class.
+    /// The new instance will be modified with the unmarshalled data after creation.
+    ///
+    /// For types that should not be edited after creation (records) see [#registerUnmarshallingStrategy(Class, Function)]
+    ///
+    /// @param type              The registered type
+    /// @param noArgsConstructor A function that creates a \_new\_ value of the type
+    /// @param <Type>            The type
+    public <Type extends Marshalled.Unmarshalled> void registerConstructor(Class<Type> type, Supplier<Type, GrammarException> noArgsConstructor) {
+        this.creatorFunctions.put(type, noArgsConstructor);
+    }
 
-            int modifiers();
+    public <Type extends Marshalled.Unmarshalled> void registerRiskyConstructor(Class<Type> type, Supplier<Type, Throwable> noArgsConstructor) {
+        this.registerConstructor(type, noArgsConstructor.hide(GrammarException.UnmarshallingException::new));
+    }
 
-            Class<?> getType();
+    public <Type extends Record> void registerRecord(Class<Type> recordType) {
+        Unwrapper<Type> unwrapper = new RecordUnwrapper<>(this, recordType);
+        this.register(recordType, unwrapper);
+    }
 
-            String getName();
+    public <Type extends Enum<Type>> void registerEnum(Class<Type> enumType) {
+        Unwrapper<Type> unwrapper = new EnumNameUnwrapper<>(enumType);
+        this.register(enumType, unwrapper);
+    }
 
+    public <Type extends Enum<Type>> void registerEnumByOrdinal(Class<Type> enumType) {
+        Unwrapper<Type> unwrapper = new EnumOrdinalUnwrapper<>(enumType);
+        this.register(enumType, unwrapper);
+    }
+
+    public <Type> void registerUncheckedObject(Class<Type> type) {
+        if (type.isEnum()) this.registerEnum((Class) type);
+        else if (type.isRecord()) this.registerRecord((Class) type);
+        else this.register(type, new ObjectUnwrapper<>(this, type));
+    }
+
+    public <Type> void register(Class<Type> type, Unwrapper<Type> unwrapper) {
+        this.registerMarshallingStrategy(type, unwrapper.marshal());
+        this.registerUnmarshallingStrategy(type, unwrapper.unmarshal());
+    }
+
+    public <Type> void registerUnmarshallingStrategy(Class<Type> type, Function<Constable, Type, GrammarException> strategy) {
+        this.unmarshallingStrategies.put(type, strategy);
+    }
+
+    public <Type> void registerMarshallingStrategy(Class<Type> type, Function<Type, Constable, GrammarException> strategy) {
+        this.marshallingStrategiesByClass.put(type, strategy);
+        this.registerMarshallingStrategy(type::isInstance, strategy);
+    }
+
+    public <Type> void registerMarshallingStrategy(Predicate<Object> predicate, Function<Type, Constable, GrammarException> strategy) {
+        this.marshallingStrategies.addFirst((PredicatedMarshallingStrategy<Object, ?>) new PredicatedMarshallingStrategy<>(predicate, strategy));
+    }
+
+    public <Type> void registerFallbackMarshallingStrategy(Predicate<Object> predicate, Function<Type, Constable, GrammarException> strategy) {
+        this.marshallingStrategies.addLast((PredicatedMarshallingStrategy<Object, ?>) new PredicatedMarshallingStrategy<>(predicate, strategy));
+    }
+
+    public <Type> Unmarshaller<Type> createUnmarshallingStrategy(Class<Type> type) {
+        return new Unmarshaller<>(this, type);
+    }
+
+    /// Turns objects into data that has the potential to be written to a data structure.
+    ///
+    /// @param object The value to be marshalled
+    /// @return The marshalled data, where possible
+    @NotNull
+    protected Constable marshal(Class<?> as, Object object) throws GrammarException {
+        return this.marshalBySupertype(as, object);
+    }
+
+    @NotNull
+    protected Constable marshal(@Nullable Object object) throws GrammarException {
+        return switch (object) {
+            case null -> Null.INSTANCE;
+            case Marshalled marshalled -> marshalled.marshal();
+            default -> this.marshalUnchecked(object);
+        };
+    }
+
+    @NotNull
+    protected <Type> Constable marshalCollection(Class<Type> elementType, Collection<Type> collection) throws GrammarException {
+        Series series = Series.empty();
+        for (Type type : collection) {
+            Constable constable = this.marshalBySupertype(elementType, type);
+            series.add(constable);
         }
-        record RecordGetter(RecordComponent component, Method accessor, Object object) implements Getter {
+        return series;
+    }
 
-            @Override
-            public Object get() throws IllegalAccessException, InvocationTargetException {
-                return accessor.invoke(object);
-            }
-
-            @Override
-            public boolean isAnnotationPresent(@NotNull Class<? extends Annotation> annotation) {
-                return component.isAnnotationPresent(annotation);
-            }
-
-            @Override
-            public <T extends Annotation> T getAnnotation(@NotNull Class<T> annotationClass) {
-                return component.getAnnotation(annotationClass);
-            }
-
-            @Override
-            public Annotation[] getAnnotations() {
-                return component.getAnnotations();
-            }
-
-            @Override
-            public Annotation[] getDeclaredAnnotations() {
-                return component.getDeclaredAnnotations();
-            }
-
-            @Override
-            public int modifiers() {
-                return accessor.getModifiers();
-            }
-
-            @Override
-            public Class<?> getType() {
-                return component.getType();
-            }
-
-            @Override
-            public String getName() {
-                return component.getName();
-            }
-
-        }
-        record FieldGetter(Field field, Object object) implements Getter {
-
-            @Override
-            public Object get() throws IllegalAccessException, InvocationTargetException {
-                return field.get(object);
-            }
-
-            @Override
-            public boolean isAnnotationPresent(@NotNull Class<? extends Annotation> annotation) {
-                return field.isAnnotationPresent(annotation);
-            }
-
-            @Override
-            public <T extends Annotation> T getAnnotation(@NotNull Class<T> annotationClass) {
-                return field.getAnnotation(annotationClass);
-            }
-
-            @Override
-            public Annotation[] getAnnotations() {
-                return field.getAnnotations();
-            }
-
-            @Override
-            public Annotation[] getDeclaredAnnotations() {
-                return field.getDeclaredAnnotations();
-            }
-
-            @Override
-            public int modifiers() {
-                return field.getModifiers();
-            }
-
-            @Override
-            public Class<?> getType() {
-                return field.getType();
-            }
-
-            @Override
-            public String getName() {
-                return field.getName();
-            }
-
-        }
-        //</editor-fold>
-        //<editor-fold desc="Object to Map" defaultstate="collapsed">
-        assert object != null : "Object was null.";
-        if (object instanceof Marshalled marshalled) {
-            container.putAll(marshalled.serialise());
-            return container;
-        }
-        final Set<Getter> fields = new HashSet<>();
-        if (type.isRecord()) for (RecordComponent component : type.getRecordComponents()) {
-            final Method accessor = component.getAccessor();
-            if (this.shouldSkip(accessor.getModifiers())) continue;
-            if (!accessor.canAccess(object)) accessor.trySetAccessible();
-            fields.add(new RecordGetter(component, accessor, object));
-        }
-        else {
-            for (Field field : type.getFields()) {
-                if (this.shouldSkip(field)) continue;
-                if (!field.canAccess(object)) field.trySetAccessible();
-                fields.add(new FieldGetter(field, object));
-            }
-            for (Field field : type.getDeclaredFields()) {
-                if (this.shouldSkip(field)) continue;
-                if (!field.canAccess(object)) field.trySetAccessible();
-                fields.add(new FieldGetter(field, object));
-            }
-        }
-        for (final Getter field : fields) {
-            try {
-                final Object value = field.get();
-                if (value == null && field.isAnnotationPresent(Optional.class)) continue;
-                final Class<?> expected = field.getType();
-                final String key = this.getName(field, field.getName());
-                if (key.equals("__data")) continue;
-                container.put(key, this.deconstruct(value, expected, field.isAnnotationPresent(Any.class)));
-            } catch (IllegalAccessException | InvocationTargetException ex) {
-                throw new GrammarException("Unable to read data '" + type.getSimpleName() + '.' + field + "' from " +
-                    "object:", ex);
-            }
-        }
+    @NotNull
+    protected <Value> Constable marshalMap(Class<Value> valueType, Map<?, Value> map) throws GrammarException {
+        Container container = Container.empty();
+        map.forEach((key, value) -> container.put(String.valueOf(key), this.marshalBySupertype(valueType, value)));
         return container;
-        //</editor-fold>
     }
 
-    /**
-     * Inserts data from a map of key-value pairs into an object's fields.
-     * The {@param object} is returned.
-     *
-     * @param object      The object whose data is to be overwritten
-     * @param type        The type to use for data injection (a supertype of {@param object})
-     * @param container   The container from which to read the data
-     * @param <Type>      The object's type
-     * @param <Container> The container type
-     * @return The object, having been written to
-     */
-    @Contract("null, null, null -> fail; _, _, _ -> param1")
-    @SuppressWarnings("unchecked")
-    protected <Type, Container extends Map<?, ?>> Type unmarshal(Type object, Class<?> type, Container container) {
-        //<editor-fold desc="Map to Object" defaultstate="collapsed">
-        assert object != null : "Object was null.";
-        assert !(object instanceof Class<?>) : "Classes cannot be written to.";
-        if (object instanceof Marshalled marshalled) {
-            marshalled.deserialise((Map<String, Object>) container);
-            return object;
+    @NotNull
+    protected Constable marshalArray(Class<?> elementType, Object array) throws GrammarException {
+        final int length = Array.getLength(array);
+        Function<Integer, Constable, RuntimeException> getter = i -> switch (array) {
+            case Object[] values -> this.marshalBySupertype(elementType, values[i]);
+            case byte[] values -> values[i];
+            case short[] values -> values[i];
+            case int[] values -> values[i];
+            case long[] values -> values[i];
+            case float[] values -> values[i];
+            case double[] values -> values[i];
+            case char[] values -> values[i];
+            case boolean[] values -> values[i];
+            default -> throw new GrammarException("Cannot marshal array of type " + array.getClass());
+        };
+        Constable[] values = new Constable[length];
+        for (int i = 0; i < length; i++) {
+            values[i] = getter.apply(i);
         }
-        if (type.isRecord()) throw new GrammarException("Data cannot be written to an existing Record object.");
-        final Set<Field> fields = new HashSet<>();
-        fields.addAll(List.of(type.getDeclaredFields()));
-        fields.addAll(List.of(type.getFields()));
-        for (final Field field : fields) {
-            final String key = this.getName(field);
-            if (key.equals("__data")) try {
-                if (!field.canAccess(object)) field.trySetAccessible();
-                assert Map.class.isAssignableFrom(field.getType()) : "Dataset field must accept map.";
-                final Map<String, Object> initial = (Map<String, Object>) field.get(object);
-                if (initial != null) initial.putAll((Map<? extends String, ?>) container);
-                else field.set(object, new LinkedHashMap<>(container));
-                continue;
-            } catch (IllegalAccessException ex) {
-                throw new GrammarException("Unable to store dataset object.", ex);
-            }
-            if (this.shouldSkip(field)) continue;
-            if (!container.containsKey(key)) continue;
-            if (!field.canAccess(object)) field.trySetAccessible();
-            final Any any = field.getAnnotation(Any.class);
-            final Object value = container.get(key);
-            final Class<?> expected;
-            if (any != null && any.value().length > 0) expected = this.getBestMatch(field.getType(), any, value);
-            else expected = field.getType();
-            try {
-                final Object existing = field.get(object);
-                if (existing != null && value instanceof Map map)
-                    this.unmarshal(existing, existing.getClass(), map);
-                else this.prepareFieldValue(object, field, expected, this.construct(value, expected));
-            } catch (Throwable ex) {
-                throw new GrammarException("Unable to write to object:", ex);
+        return Series.of(values);
+    }
+
+    protected @NotNull Constable marshalBySupertype(Class<?> as, @Nullable Object object) throws GrammarException {
+        if (object == null) return Null.INSTANCE;
+        if (as.isPrimitive()) return this.marshal(object);
+        if (as.isArray()) return this.marshalArray(as.getComponentType(), object);
+        // Try to use the provided type first
+        Function<?, Constable, GrammarException> function = this.marshallingStrategiesByClass.get(as);
+        if (function != null) return function.uncheckArgument().apply(object);
+        // Otherwise fall back to anything we can
+        return this.marshal(object);
+    }
+
+    /// Marshals an object using one of the provided marshalling strategies.
+    protected Constable marshalUnchecked(Object object) throws GrammarException {
+        if (object.getClass().isArray()) return this.marshalArray(object.getClass().getComponentType(), object);
+        if (object instanceof ConstantDesc) return (Constable) object;
+        for (PredicatedMarshallingStrategy<?, ?> strategy : this.getMarshallingStrategies()) {
+            if (strategy.tester().test(object)) {
+                return strategy.apply(object);
             }
         }
-        return object;
-        //</editor-fold>
-    }
-
-    /**
-     * Whether {@param field} should be skipped when marshalling.
-     */
-    protected boolean shouldSkip(Field field) {
-        return this.shouldSkip(field.getModifiers());
-    }
-
-    protected boolean shouldSkip(int modifiers) {
-        if ((modifiers & 0x00000002) != 0) return true;
-        if ((modifiers & 0x00000008) != 0) return true;
-        if ((modifiers & 0x00000080) != 0) return true;
-        return (modifiers & 0x00001000) != 0;
-    }
-
-    private void setPrimitiveField(Field field, Object source, Class<?> expected, Object value)
-        throws IllegalAccessException {
-        //<editor-fold desc="Sets a field to a primitive value." defaultstate="collapsed">
-        if (expected == boolean.class && value instanceof Boolean boo) field.set(source, boo);
-        else if (value instanceof Number number) {
-            if (expected == byte.class) field.set(source, number.byteValue());
-            else if (expected == short.class) field.set(source, number.shortValue());
-            else if (expected == int.class) field.set(source, number.intValue());
-            else if (expected == long.class) field.set(source, number.longValue());
-            else if (expected == double.class) field.set(source, number.doubleValue());
-            else if (expected == float.class) field.set(source, number.floatValue());
-        } else if (value == null) {
-            if (expected == boolean.class) field.set(source, false);
-            else field.set(source, 0);
-        } else throw new UnmarshallingException("Could not set field '" + field.getName()
-            + "' (as " + expected.getSimpleName() + ") to '"
-            + value + "' (" + value.getClass() + ").");
-        //</editor-fold>
-    }
-
-    /**
-     * Scores a class based on how closely it matches the assigned data.
-     */
-    private float score(Class<?> type, Map<String, Object> map) {
-        //<editor-fold desc="Scores how closely the type reflects the data map." defaultstate="collapsed">
-        if (type.isPrimitive() || type == String.class) return -100F;
-        final Set<String> fields = new HashSet<>(), required = new HashSet<>();
-        for (Field field : type.getFields()) {
-            if (this.shouldSkip(field.getModifiers())) continue;
-            fields.add(this.getName(field));
-            if (field.isAnnotationPresent(Optional.class)) continue;
-            required.add(this.getName(field));
-        }
-        for (Field field : type.getDeclaredFields()) {
-            if (this.shouldSkip(field.getModifiers())) continue;
-            fields.add(this.getName(field));
-            if (field.isAnnotationPresent(Optional.class)) continue;
-            required.add(this.getName(field));
-        }
-        float score = 0;
-        for (String string : map.keySet()) {
-            if (string == null || string.startsWith("__")) continue;
-            if (fields.contains(string)) score += 0.8F;
-            else score -= 0.8F;
-        }
-        for (String string : required) {
-            if (!map.containsKey(string)) score -= 1.2F;
-        }
-        return score;
-        //</editor-fold>
-    }
-
-    /**
-     * Finds the closest unmarshalling match for data.
-     */
-    private Class<?> getBestMatch(Class<?> alternative, Any any, Object value) {
-        //<editor-fold desc="Handle primitive types." defaultstate="collapsed">
-        if (value == null) {
-            if (alternative.isPrimitive()) { // to find correct default value, e.g. false, 0
-                for (Class<?> type : any.value()) if (type.isPrimitive()) return type;
-                for (Class<?> type : any.value()) if (Number.class.isAssignableFrom(type)) return type;
-                return alternative;
-            }
-            return alternative;
-        }
-        if (value instanceof Boolean) return boolean.class;
-        if (value instanceof Number) {
-            for (Class<?> type : any.value()) if (type.isPrimitive() && type != boolean.class) return type;
-            if (alternative.isPrimitive()) return alternative;
-            for (Class<?> type : any.value()) if (type.isInstance(value)) return type;
-            return alternative;
-        }
-        //</editor-fold>
-        if (value instanceof CharSequence) return alternative;
-        if (value instanceof Map child) {
-            final Class<?>[] types = Arrays.copyOf(any.value(), any.value().length);
-            Arrays.sort(types, 0, types.length, Comparator.comparing(c -> this.score(c, child)));
-            return types[types.length - 1];
-        }
-        return alternative;
-    }
-
-    /**
-     * Unmarshalls simple objects into the correct type to be inserted into a field.
-     */
-    @SuppressWarnings("RawUseOfParameterized")
-    protected void prepareFieldValue(Object source, Field field, Class<?> expected, Object value)
-        throws IllegalAccessException {
-        //<editor-fold desc="Set Field Value" defaultstate="collapsed">
-        if (expected.isPrimitive()) this.setPrimitiveField(field, source, expected, value);
-        else if (value == null) field.set(source, null);
-        else if (value instanceof CharSequence sequence && expected == String.class)
-            field.set(source, sequence.toString());
-//        else if (value instanceof Map<?, ?> child) {
-//            final Object sub, existing = field.get(source);
-//            if (existing == null) field.set(source, sub = this.createObject(expected));
-//            else sub = existing;
-//            this.unmarshal(sub, expected, child);
-//        }
-        else if (Collection.class.isAssignableFrom(expected) && value instanceof Collection<?> list) {
-            final Collection replacement = this.makeCollection(source, field, expected, list);
-            field.set(source, replacement);
-        } else if (expected.isArray() && value instanceof Collection<?> list) {
-            final Any any = field.getAnnotation(Any.class);
-            if (any != null && any.value().length > 0) field.set(source, this.constructArray(expected, any, list));
-            else field.set(source, this.constructArray(expected, list));
-        } else if (expected.isAssignableFrom(value.getClass()) || expected.isInstance(value)) field.set(source, value);
-        else throw new GrammarException("Value of '" + field.getName() + "' (" + source.getClass()
-                .getSimpleName() + ") could not be mapped to type " + expected.getSimpleName());
-        //</editor-fold>
-    }
-
-    private Collection makeCollection(Object source, Field field, Class<?> expected, Collection<?> list)
-        throws IllegalAccessException {
-        final Collection replacement;
-        //<editor-fold desc="Constructs and unmarshalls the data collection." defaultstate="collapsed">
-        final Any any = field.getAnnotation(Any.class);
-        Class<?> expectedElement = Object.class;
-        if (field.getGenericType() instanceof ParameterizedType parameterized) {
-            final Type[] types = parameterized.getActualTypeArguments();
-            if (types.length == 1) expectedElement = (Class<?>) types[0];
-        }
-        if (field.get(source) instanceof Collection current) (replacement = current).clear();
-        else if (!Modifier.isAbstract(expected.getModifiers()))
-            replacement = (Collection) this.createObject(field.getType());
-        else if (Set.class.isAssignableFrom(expected)) replacement = new LinkedHashSet();
-        else if (List.class.isAssignableFrom(expected)) replacement = new ArrayList();
-        else replacement = new LinkedList();
-        if (any != null && any.value().length > 0) for (Object thing : list) {
-            final Class<?> bestMatch = this.getBestMatch(expectedElement, any, thing);
-            replacement.add(this.construct(thing, bestMatch));
-        }
-        else for (Object thing : list) //noinspection unchecked
-            replacement.add(this.construct(thing, expectedElement));
-        //</editor-fold>
-        return replacement;
-    }
-
-    /**
-     * Constructs a complex object from its marshalled type.
-     */
-    protected Object construct(Object data, Class<?> expected) {
-        if (data == null) return null;
-        else if (expected.isPrimitive()) return data;
-        else if (expected == String.class && data instanceof CharSequence sequence) return sequence.toString();
-        else if (data instanceof Collection<?> list && expected.isArray()) return this.constructArray(expected, list);
-        else if (data instanceof Map<?, ?> map && !Map.class.isAssignableFrom(expected)) {
-            if (expected.isRecord())
-                return this.createRecord(expected, map);
-            else return this.unmarshal(this.createObject(expected), expected, map);
-        } else if (expected.isEnum()) return this.createEnum(expected, data);
-        else if (expected == UUID.class && data instanceof String text) return UUID.fromString(text);
-        else return data;
-    }
-
-    @SuppressWarnings({"unchecked", "TypeParameterHidesVisibleType"})
-    private <Type> Type createRecord(Class<Type> expected, @SuppressWarnings("rawtypes") Map data) {
-        //<editor-fold desc="Creates a record from its component data." defaultstate="collapsed">
-        final RecordComponent[] components = expected.getRecordComponents();
-        final Object[] parameters = new Object[components.length];
-        for (int i = 0; i < components.length; i++) {
-            final RecordComponent component = components[i];
-            final Any any = component.getAnnotation(Any.class);
-            final Class<?> type;
-            if (any != null && any.value().length > 0) type = this.getBestMatch(component.getType(), any, data);
-            else type = component.getType();
-            final String name = this.getName(component, component.getName());
-            if (type.isPrimitive()) parameters[i] = data.getOrDefault(name, this.getDefault(type));
-            else {
-                final Object value = data.get(name);
-                if (type.isInstance(value)) parameters[i] = value;
-                else parameters[i] = this.construct(value, type);
-            }
-        }
-        final Constructor<Type> constructor = this.getCanonicalConstructor(expected);
         try {
-            if (!constructor.canAccess(null)) constructor.trySetAccessible();
-        } catch (SecurityException ignored) {}
-        try {
-            return constructor.newInstance(parameters);
-        } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
-            throw new GrammarException(e);
+            if (parent != null) return parent.marshalUnchecked(object);
+        } catch (GrammarException.NoMarshallingStrategy _) {
+            // Suppress since we can keep going here
         }
-        //</editor-fold>
+        return this.failToMarshal(object);
+    }
+
+    protected <Value> Constable failToMarshal(Value object) throws GrammarException {
+        if (object instanceof Constable constable) return constable;
+        assert object != null;
+        throw new GrammarException.NoMarshallingStrategy("Unable to marshall value: " + object + " (" + object.getClass() + ")");
+    }
+
+    /// Transforms constant data into a new value of the given type,
+    /// provided the grammar has a strategy for un-marshalling that kind of object.
+    protected <Value> Value unmarshal(Class<Value> type, Constable data) throws GrammarException {
+        if (type.isPrimitive()) // noinspection unchecked
+            return (Value) this.unmarshalPrimitive(type, data);
+        if (type.isInstance(data)) return type.cast(data);
+        if (Null.isNull(data)) return null;
+        if (type.isArray()) return this.unmarshalArray(type, type.getComponentType(), assertIsSeries(data));
+        if (Marshalled.Unmarshalled.class.isAssignableFrom(type) && data instanceof Container container) {
+            Supplier<Value, GrammarException> constructor = this.creatorFunction(type);
+            Value value = constructor.get();
+            Marshalled.Unmarshalled unmarshalled = (Marshalled.Unmarshalled) value;
+            unmarshalled.unmarshal(container);
+            return value;
+        }
+        Function<Constable, Value, GrammarException> function = this.unmarshallingStrategyFor(type);
+        return function.apply(data);
+    }
+
+    private Object unmarshalPrimitive(Class<?> type, Constable wrapped) {
+        if (wrapped == null) return this.getDefault(type);
+        return wrapped;
+    }
+
+    protected <ArrayType, ComponentType> ArrayType unmarshalArray(Class<ArrayType> arrayType, Class<ComponentType> componentType, Collection<Constable> data) {
+        Object array = Array.newInstance(componentType, data.size());
+        BiConsumer<Integer, Constable> putter = (i, object) -> {
+            switch (array) {
+                case Object[] values -> values[i] = this.unmarshal(componentType, object);
+                case byte[] values -> values[i] = this.unmarshal(byte.class, object);
+                case short[] values -> values[i] = this.unmarshal(short.class, object);
+                case int[] values -> values[i] = this.unmarshal(int.class, object);
+                case long[] values -> values[i] = this.unmarshal(long.class, object);
+                case float[] values -> values[i] = this.unmarshal(float.class, object);
+                case double[] values -> values[i] = this.unmarshal(double.class, object);
+                case char[] values -> values[i] = this.unmarshal(char.class, object);
+                case boolean[] values -> values[i] = this.unmarshal(boolean.class, object);
+                default -> throw new GrammarException("Cannot unmarshal array of type " + array.getClass());
+            }
+        };
+        int index = 0;
+        for (Constable datum : data)
+            putter.accept(index++, datum);
+        return arrayType.cast(array);
+    }
+
+    protected <ComponentType> void unmarshalSeries(Class<ComponentType> componentType, Collection<Constable> data, Consumer<ComponentType> storage) {
+        for (Constable datum : data)
+            storage.accept(this.unmarshal(componentType, datum));
+    }
+
+    protected <ComponentType> Collection<ComponentType> unmarshalSeries(Class<ComponentType> componentType, Collection<Constable> data) {
+        Collection<ComponentType> collection = new ArrayList<>();
+        this.unmarshalSeries(componentType, data, collection::add);
+        return collection;
+    }
+
+    protected <ComponentType> Collection<ComponentType> unmarshalSeries(Class<ComponentType> componentType, Collection<Constable> data, Collection<ComponentType> storage) {
+        this.unmarshalSeries(componentType, data, storage::add);
+        return storage;
+    }
+
+    protected <ComponentType> void unmarshalMap(Class<ComponentType> componentType, Container data, BiConsumer<String, ComponentType> storage) {
+        data.forEach((key, value) -> storage.accept(key, unmarshal(componentType, value)));
+    }
+
+    private <ComponentType> Map<?, ComponentType> unmarshalMap(Class<ComponentType> componentType, Container data, Map<?, ComponentType> storage) {
+        //noinspection rawtypes,unchecked
+        this.unmarshalMap(componentType, data, (BiConsumer<String, ComponentType>) ((Map) storage)::put);
+        return storage;
+    }
+
+    protected <Value> Function<Constable, Value, GrammarException> unmarshallingStrategyFor(Class<Value> type) {
+        return this.unmarshallingStrategyFor(type, false);
+    }
+
+    protected <Value> Function<Constable, Value, GrammarException> unmarshallingStrategyFor(Class<Value> type, boolean direct) {
+        assert type != null;
+        Map<Class<?>, Function<Constable, ?, GrammarException>> map = this.getUnmarshallingStrategies();
+        Function<Constable, ?, GrammarException> strategy = map.get(type);
+        if (strategy != null) return strategy.uncheckResult();
+        // Check if the parent type has a direct strategy
+        try {
+            if (parent != null) return parent.unmarshallingStrategyFor(type, direct);
+        } catch (GrammarException.NoUnmarshallingStrategy _) {
+            // We can keep trying
+        }
+        if (direct)
+            return this.failToUnmarshal(type);
+        // Check for unregistered subtypes: e.g. an Integer satisfies a strategy for Number
+        for (final var entry : map.entrySet()) {
+            Class<?> key = entry.getKey();
+            if (type.isAssignableFrom(key)) return entry.getValue().uncheckResult();
+        }
+        return this.failToUnmarshal(type);
+    }
+
+    protected <Value> Function<Constable, Value, GrammarException> failToUnmarshal(Class<Value> type) {
+        throw new GrammarException.NoUnmarshallingStrategy("No registered unmarshalling strategy for " + type);
+    }
+
+    protected boolean knowsCreatorFunctionFor(Class<?> type) {
+        return creatorFunctions.containsKey(type);
+    }
+
+    protected <Type> @NotNull Type create(Class<Type> type) throws GrammarException {
+        if (type.isInterface()) {
+            /*
+            Specifically for these three common field types we can make
+            an assumption that these are safe extenders.
+            Obviously, they lack special properties (e.g. immutability)
+            but user should take responsibility for not labelling fields properly.
+            The linked editions are used for ordering preservation.
+             */
+            if (type == List.class) return (Type) new ArrayList<>();
+            if (type == Map.class) return (Type) new LinkedHashMap<>();
+            if (type == Set.class) return (Type) new LinkedHashSet<>();
+        }
+        if (Modifier.isAbstract(type.getModifiers()))
+            throw new GrammarException("Cannot create instance of abstract " + type.getSimpleName());
+        Supplier<Type, GrammarException> function = this.creatorFunction(type);
+        if (function == null) throw new GrammarException("Cannot create instance of " + type.getSimpleName());
+        return function.get();
+    }
+
+    protected <Type> Supplier<Type, GrammarException> creatorFunction(Class<Type> type) throws GrammarException {
+        this.creatorFunctions.computeIfAbsent(type, this::establishCreatorFunction);
+        return creatorFunctions.get(type).uncheckResult();
+    }
+
+    protected <Type> Supplier<Type, GrammarException> establishCreatorFunction(Class<Type> type) {
+        if (parent != null && parent.knowsCreatorFunctionFor(type)) return parent.creatorFunction(type);
+        Supplier<Object, Throwable> constructor = this.findAppropriateConstructor(type);
+        return constructor.hide(GrammarException::new).uncheckResult();
+    }
+
+    private Supplier<Object, Throwable> findAppropriateConstructor(Class<?> type) {
+        try {
+            // Try and use the available entry point
+            Constructor<?> declaredConstructor = type.getConstructor();
+            if (!declaredConstructor.canAccess(null)) throw new InaccessibleObjectException();
+            return declaredConstructor::newInstance;
+        } catch (NoSuchMethodException | InaccessibleObjectException | SecurityException _) {
+            // Create our own
+            ReflectionFactory factory = ReflectionFactory.getReflectionFactory();
+            return factory.newConstructorForSerialization(type, rootOfAll)::newInstance;
+        }
+    }
+
+    protected Map<Class<?>, Function<Constable, ?, GrammarException>> getUnmarshallingStrategies() {
+        return unmarshallingStrategies;
+    }
+
+    protected Iterable<PredicatedMarshallingStrategy<Object, ?>> getMarshallingStrategies() {
+        return marshallingStrategies;
     }
 
     private Object getDefault(Class<?> type) {
-        if (type == byte.class) return (byte) 0;
-        if (type == short.class) return (short) 0;
         if (type == int.class) return 0;
-        if (type == long.class) return 0L;
+        if (type == boolean.class) return false;
         if (type == float.class) return 0.0F;
         if (type == double.class) return 0.0;
-        if (type == boolean.class) return false;
+        if (type == long.class) return 0L;
+        if (type == short.class) return (short) 0;
         if (type == char.class) return (char) 0;
+        if (type == byte.class) return (byte) 0;
         return null;
     }
 
-    private <Type> Constructor<Type> getCanonicalConstructor(Class<Type> record) {
-        Class<?>[] componentTypes = Arrays.stream(record.getRecordComponents())
-            .map(RecordComponent::getType)
-            .toArray(Class<?>[]::new);
-        try {
-            return record.getDeclaredConstructor(componentTypes);
-        } catch (NoSuchMethodException e) {
-            throw new GrammarException("Record's canonical constructor was missing.", e);
-        }
-    }
+    public static class Unsafe extends Grammar {
 
-    /**
-     * Constructs an array from a list of marshalled values.
-     */
-    protected Object constructArray(Class<?> type, Collection<?> list) {
-        //<editor-fold desc="List to Array" defaultstate="collapsed">
-        final Class<?> component = type.getComponentType();
-        final Object object = Array.newInstance(component, list.size());
-        final Object[] objects = list.toArray();
-        if (component.isPrimitive()) {
-            if (component == boolean.class) for (int i = 0; i < objects.length; i++)
-                Array.setBoolean(object, i, (boolean) objects[i]);
-            else if (component == int.class) for (int i = 0; i < objects.length; i++)
-                Array.setInt(object, i, ((Number) objects[i]).intValue());
-            else if (component == long.class) for (int i = 0; i < objects.length; i++)
-                Array.setLong(object, i, ((Number) objects[i]).longValue());
-            else if (component == double.class) for (int i = 0; i < objects.length; i++)
-                Array.setDouble(object, i, ((Number) objects[i]).doubleValue());
-            else if (component == float.class) for (int i = 0; i < objects.length; i++)
-                Array.setFloat(object, i, ((Number) objects[i]).floatValue());
-        } else if (component.isEnum()) for (int i = 0; i < objects.length; i++)
-            Array.set(object, i, this.createEnum(component, objects[i]));
-        else if (component == UUID.class) for (int i = 0; i < objects.length; i++)
-            Array.set(object, i, UUID.fromString(objects[i].toString()));
-        else {
-            final Object[] array = (Object[]) object;
-            for (int i = 0; i < objects.length; i++) array[i] = this.construct(objects[i], component);
+        protected Unsafe() {
+            super();
         }
-        return object;
-        //</editor-fold>
-    }
 
-    protected Object constructArray(Class<?> type, Any any, Collection<?> list) {
-        //<editor-fold desc="List to Array" defaultstate="collapsed">
-        final Class<?> component = type.getComponentType();
-        final Object object = Array.newInstance(component, list.size());
-        final Object[] objects = list.toArray();
-        if (component.isEnum()) for (int i = 0; i < objects.length; i++)
-            Array.set(object, i, this.createEnum(component, objects[i]));
-        else if (component == UUID.class) for (int i = 0; i < objects.length; i++)
-            Array.set(object, i, UUID.fromString(objects[i].toString()));
-        else {
-            final Object[] array = (Object[]) object;
-            for (int i = 0; i < objects.length; i++)
-                array[i] = this.construct(objects[i], this.getBestMatch(component, any, object));
+        protected Unsafe(Grammar parent) {
+            super(parent);
         }
-        return object;
-        //</editor-fold>
-    }
 
-    /**
-     * Deconstructs a complex object into its marshalled type.
-     */
-    protected Object deconstruct(Object value, Class<?> component, boolean any) {
-        //<editor-fold desc="Complex to Simple" defaultstate="collapsed">
-        if (value == null) return null;
-        else if (value instanceof String || value instanceof Number || value instanceof Boolean) return value;
-        else if (value instanceof Collection<?> list) {
-            final List<Object> replacement = new ArrayList<>(list.size());
-            for (Object object : list)
-                replacement.add(this.deconstruct(object, object == null ? null : object.getClass(), any));
-            return replacement;
-        } else if (value instanceof Map<?, ?> map) {
-            final Map<String, Object> replacement = new LinkedHashMap<>(map.size());
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                final Object object = entry.getValue();
-                replacement.put(String.valueOf(entry.getKey()), this.deconstruct(entry.getValue(), object == null ?
-                    null : object.getClass(), any));
+        @Override
+        public <Type extends Record> void registerRecord(Class<Type> recordType) {
+            super.registerRecord(recordType);
+        }
+
+        @Override
+        protected <Value> Constable failToMarshal(Value object) throws GrammarException {
+            //noinspection unchecked
+            Class<Value> type = (Class<Value>) object.getClass();
+            if (!marshallingStrategiesByClass.containsKey(type)) {
+                Unwrapper<Value> unwrapper = this.registerHandlerFor(type);
+                if (unwrapper != null)
+                    return unwrapper.marshal().apply(object);
             }
-            return replacement;
+            return super.failToMarshal(object);
         }
-        if (value.getClass().isEnum()) return ((Enum) value).name();
-        else if (value.getClass().isArray()) {
-            final List<Object> list = new ArrayList<>();
-            this.deconstructArray(value, component.getComponentType(), list, any);
-            return list;
+
+        @Override
+        protected <Value> Function<Constable, Value, GrammarException> failToUnmarshal(Class<Value> type) {
+            if (!unmarshallingStrategies.containsKey(type)) {
+                Unwrapper<Value> unwrapper = this.registerHandlerFor(type);
+                if (unwrapper != null)
+                    return unwrapper.unmarshal();
+            }
+            return super.failToUnmarshal(type);
         }
-        final Map<String, Object> map = new LinkedHashMap<>();
-        this.marshal(value, (Class<?>) (any ? value.getClass() : component), map);
-        return map;
-        //</editor-fold>
-    }
 
-    protected void deconstructArray(Object array, Class<?> component, List<Object> list, boolean any) {
-        //<editor-fold desc="Array to List" defaultstate="collapsed">
-        if (component.isPrimitive()) {
-            if (array instanceof int[] numbers) for (int number : numbers) list.add(number);
-            else if (array instanceof long[] numbers) for (long number : numbers) list.add(number);
-            else if (array instanceof double[] numbers) for (double number : numbers) list.add(number);
-            else if (array instanceof float[] numbers) for (float number : numbers) list.add(number);
-            else if (array instanceof boolean[] numbers) for (boolean number : numbers) list.add(number);
-        } else {
-            final Object[] objects = (Object[]) array;
-            if (any) for (final Object object : objects) list.add(this.deconstruct(object, object.getClass(), true));
-            else for (final Object object : objects) list.add(this.deconstruct(object, component, false));
-        }
-        //</editor-fold>
-    }
-
-    protected String getName(Field field) {
-        if (field.isAnnotationPresent(Name.class)) return field.getAnnotation(Name.class).value();
-        else return field.getName();
-    }
-
-    protected String getName(AnnotatedElement field, String name) {
-        if (field.isAnnotationPresent(Name.class)) return field.getAnnotation(Name.class).value();
-        else return name;
-    }
-
-    @SuppressWarnings("all")
-    protected Object createEnum(Class<?> type, Object value) {
-        if (value instanceof Number number) return type.getEnumConstants()[number.intValue()];
-        return Enum.valueOf((Class) type, value.toString());
-    }
-
-    @SuppressWarnings("unchecked")
-    protected <Type> Constructor<Type> createConstructor(Class<Type> type) throws NoSuchMethodException {
-        final Constructor<?> shift = Object.class.getConstructor();
-        return (Constructor<Type>) ReflectionFactory.getReflectionFactory().newConstructorForSerialization(type, shift);
-    }
-
-    @SuppressWarnings("unchecked")
-    protected <Type> Constructor<Type> getConstructor(Class<Type> type) throws NoSuchMethodException {
-        if (constructors.containsKey(type)) return (Constructor<Type>) constructors.get(type);
-        if (type.isLocalClass() || type.getEnclosingClass() != null || this.noSimplexConstructor(type)) {
-            final Constructor<Type> constructor = this.createConstructor(type);
-            assert constructor != null;
-            Grammar.constructors.put(type, constructor);
-            return constructor;
-        } else {
-            final Constructor<Type> constructor = type.getDeclaredConstructor();
-            Grammar.constructors.put(type, constructor);
-            final boolean result = constructor.trySetAccessible();
-            assert result || constructor.canAccess(null);
-            return constructor;
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        protected <Type> Unwrapper<Type> registerHandlerFor(Class<Type> typeClass) {
+            Unwrapper unwrapper;
+            if (typeClass.isRecord()) {
+                unwrapper = new RecordUnwrapper<>(this, (Class) typeClass);
+            } else if (typeClass.isEnum()) {
+                unwrapper = new EnumNameUnwrapper<>((Class) typeClass);
+            } else if (ObjectUnwrapper.isSuitable(typeClass)) {
+                unwrapper = new ObjectUnwrapper<>(this, (Class) typeClass);
+            } else return null;
+            this.register((Class) typeClass, unwrapper);
+            return unwrapper;
         }
     }
 
-    protected boolean noSimplexConstructor(Class<?> type) {
-        for (Constructor<?> constructor : type.getDeclaredConstructors()) {
-            if (constructor.getParameterCount() == 0) return false;
-        }
-        return true;
-    }
+    public record PredicatedMarshallingStrategy<ObjectType, DataType extends Constable>(Predicate<Object> tester,
+                                                                                        Function<ObjectType, DataType, GrammarException> strategy) implements Function<Object, DataType, GrammarException> {
 
-    @SuppressWarnings("unchecked")
-    protected <Type> Type createObject(Class<Type> type) {
-        if (type.isArray()) return (Type) Array.newInstance(type, 0);
-        if (type.isInterface()) throw new GrammarException("Unable to create an interface: " + type.getSimpleName());
-        try {
-            final Constructor<Type> constructor = this.getConstructor(type);
-            return constructor.newInstance();
-        } catch (InvocationTargetException | InstantiationException | IllegalAccessException |
-                 NoSuchMethodException e) {
-            throw new GrammarException("Unable to create '" + type.getSimpleName() + "' object.", e);
+        @Override
+        public DataType apply(Object objectType) throws GrammarException {
+            //noinspection unchecked assessed by the predicate
+            return strategy.apply((ObjectType) objectType);
         }
     }
 
+    public class Access {
+
+        public @NotNull Constable marshalArray(Class<?> elementType, Object array) throws GrammarException {
+            return Grammar.this.marshalArray(elementType, array);
+        }
+
+        public @NotNull Constable marshalBySupertype(Class<?> as, @Nullable Object object) throws GrammarException {
+            return Grammar.this.marshalBySupertype(as, object);
+        }
+
+        public @NotNull <Type> Constable marshalCollection(Class<Type> elementType, Collection<Type> collection) throws GrammarException {
+            return Grammar.this.marshalCollection(elementType, collection);
+        }
+
+        public @NotNull <Value> Constable marshalMap(Class<Value> valueType, Map<?, Value> map) throws GrammarException {
+            return Grammar.this.marshalMap(valueType, map);
+        }
+
+        public Constable marshalUnchecked(Object object) throws GrammarException {
+            return Grammar.this.marshalUnchecked(object);
+        }
+
+        public <Value> Value unmarshal(Class<Value> type, Constable data) throws GrammarException {
+            return Grammar.this.unmarshal(type, data);
+        }
+
+        public <ComponentType> void unmarshalSeries(Class<ComponentType> componentType, Collection<Constable> data, Consumer<ComponentType> storage) {
+            Grammar.this.unmarshalSeries(componentType, data, storage);
+        }
+
+        public <ComponentType> Collection<ComponentType> unmarshalSeries(Class<ComponentType> componentType, Collection<Constable> data, Collection<ComponentType> storage) {
+            return Grammar.this.unmarshalSeries(componentType, data, storage);
+        }
+
+        public <ComponentType> void unmarshalMap(Class<ComponentType> componentType, Container data, BiConsumer<String, ComponentType> storage) {
+            Grammar.this.unmarshalMap(componentType, data, storage);
+        }
+
+        public <ComponentType> Map<?, ComponentType> unmarshalMap(Class<ComponentType> componentType, Container data, Map<?, ComponentType> storage) {
+            return Grammar.this.unmarshalMap(componentType, data, storage);
+        }
+
+        public Constable marshal(@Nullable Object object) {
+            return Grammar.this.marshal(object);
+        }
+
+        public Constable marshal(Class<?> as, Object object) {
+            return Grammar.this.marshal(as, object);
+        }
+
+        public <Type> Supplier<Type, GrammarException> creatorFunction(Class<Type> type) {
+            return Grammar.this.creatorFunction(type);
+        }
+
+        public <ArrayType, ComponentType> ArrayType unmarshalArray(Class<ArrayType> arrayType, Class<ComponentType> componentType, Collection<Constable> data) {
+            return Grammar.this.unmarshalArray(arrayType, componentType, data);
+        }
+
+        public <Value> @NotNull Value create(Class<Value> type) {
+            return Grammar.this.create(type);
+        }
+    }
 }
