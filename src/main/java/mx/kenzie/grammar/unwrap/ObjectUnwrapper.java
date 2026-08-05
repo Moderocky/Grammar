@@ -29,6 +29,8 @@ public class ObjectUnwrapper<Type> extends AbstractClassUnwrapper<Type> {
             this.fieldSetters.put(unwrap.name(), field::set);
         }
 
+        this.constructor = _ -> this.grammar.create(type);
+
     }
 
     public static boolean isSuitable(Class<?> type) {
@@ -47,7 +49,7 @@ public class ObjectUnwrapper<Type> extends AbstractClassUnwrapper<Type> {
     @Override
     public Function<Constable, Type, GrammarException> unmarshal() {
         Function<Container, Type, Throwable> function = container -> {
-            Type object = grammar.create(type);
+            Type object = constructor.apply(new Object[0]);
 
             for (final var entry : detransformers.entrySet()) {
                 String key = entry.getKey();
@@ -71,14 +73,6 @@ public class ObjectUnwrapper<Type> extends AbstractClassUnwrapper<Type> {
         fields.removeIf(this::shouldSkipDuringSerialisation);
         fields.addAll(this.getEffectiveFields(type.getSuperclass()));
         return fields;
-    }
-
-    protected boolean shouldSkipDuringSerialisation(Field field) {
-        if (Modifier.isFinal(field.getModifiers()) && field.getName().startsWith("this$")) {
-            // this field is typically synthetic and added by the compiler to inner classes
-            return true;
-        }
-        return Modifier.isStatic(field.getModifiers()) || Modifier.isPrivate(field.getModifiers()) || Modifier.isTransient(field.getModifiers());
     }
 
     @Override

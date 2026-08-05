@@ -101,6 +101,10 @@ public class Grammar {
         this.registerUnmarshallingStrategy(type, unwrapper.unmarshal());
     }
 
+    public <Type, Data extends Constable> void registerUnmarshallingStrategy(Class<Type> type, Class<Data> dataType, Function<Data, Type, GrammarException> strategy) {
+        this.unmarshallingStrategies.put(type, strategy.compose(dataType::cast));
+    }
+
     public <Type> void registerUnmarshallingStrategy(Class<Type> type, Function<Constable, Type, GrammarException> strategy) {
         this.unmarshallingStrategies.put(type, strategy);
     }
@@ -135,6 +139,9 @@ public class Grammar {
     protected Constable marshal(@Nullable Object object) throws GrammarException {
         return switch (object) {
             case null -> Null.INSTANCE;
+            case Container container -> container;
+            case Series container -> container;
+            case org.valross.constantine.Array container -> container;
             case Marshalled marshalled -> marshalled.marshal();
             default -> this.marshalUnchecked(object);
         };

@@ -65,10 +65,13 @@ public class RecordUnwrapper<Type extends Record> extends AbstractClassUnwrapper
     public Function<Constable, Type, GrammarException> unmarshal() {
         Function<Container, Type, GrammarException> function = container -> {
             List<Object> arguments = new ArrayList<>(length);
+            int index = 0;
             for (final var entry : detransformers.entrySet()) {
                 if (!container.containsKey(entry.getKey()))
-                    throw new GrammarException("Data is missing key '" + entry.getKey() + "'");
+                    //noinspection unchecked
+                    return (Type) defaultValue(components[index].getType());
                 arguments.add(entry.getValue().apply(container.get(entry.getKey())));
+                ++index;
             }
             return constructor.apply(arguments);
         };

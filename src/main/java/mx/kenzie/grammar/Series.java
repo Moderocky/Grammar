@@ -47,6 +47,10 @@ public interface Series extends Collection<Constable>, List<Constable>, Constant
         return new LongSeries(primitives);
     }
 
+    static Series backedBy(List<Constable> collection) {
+        return new BackedSeries(collection);
+    }
+
     static boolean equals(Series a, Collection<?> b) {
         if (a == b) return true;
         if (a == null || b == null) return false;
@@ -66,6 +70,11 @@ public interface Series extends Collection<Constable>, List<Constable>, Constant
         int index = 0;
         for (Constable constable : this) array[index++] = constable;
         return array;
+    }
+
+    default <Value> Value at(int index) {
+        //noinspection unchecked
+        return (Value) this.get(index);
     }
 
     @Override
@@ -112,8 +121,9 @@ interface PrimitiveSeries extends Series, Constant {
         };
     }
 
+    @SuppressWarnings("unchecked")
     @Override
-    default @NotNull <T> T[] toArray(@NotNull T[] a) {
+    default <T> T @NotNull [] toArray(T @NotNull [] a) {
         Object array = backingArray();
         if (a.length == 0)
             a = (T[]) java.lang.reflect.Array.newInstance(a.getClass().getComponentType(), this.size());
@@ -390,12 +400,12 @@ record BackedSeries(List<Constable> backing) implements Series {
     }
 
     @Override
-    public Iterator<Constable> iterator() {
+    public @NotNull Iterator<Constable> iterator() {
         return backing.iterator();
     }
 
     @Override
-    public <T> T[] toArray(T[] a) {
+    public <T> T @NotNull [] toArray(T @NotNull [] a) {
         return backing.toArray(a);
     }
 
@@ -409,13 +419,14 @@ record BackedSeries(List<Constable> backing) implements Series {
         return backing.remove(o);
     }
 
+    @SuppressWarnings("SlowListContainsAll")
     @Override
-    public boolean containsAll(Collection<?> c) {
+    public boolean containsAll(@NotNull Collection<?> c) {
         return backing.containsAll(c);
     }
 
     @Override
-    public boolean addAll(Collection<? extends Constable> c) {
+    public boolean addAll(@NotNull Collection<? extends Constable> c) {
         return backing.addAll(c);
     }
 
@@ -425,12 +436,12 @@ record BackedSeries(List<Constable> backing) implements Series {
     }
 
     @Override
-    public boolean removeAll(Collection<?> c) {
+    public boolean removeAll(@NotNull Collection<?> c) {
         return backing.removeAll(c);
     }
 
     @Override
-    public boolean retainAll(Collection<?> c) {
+    public boolean retainAll(@NotNull Collection<?> c) {
         return backing.retainAll(c);
     }
 
@@ -484,6 +495,7 @@ record BackedSeries(List<Constable> backing) implements Series {
         return backing.subList(fromIndex, toIndex);
     }
 
+    @SuppressWarnings("EqualsDoesntCheckParameterClass")
     @Override
     public boolean equals(Object obj) {
         return backing.equals(obj);

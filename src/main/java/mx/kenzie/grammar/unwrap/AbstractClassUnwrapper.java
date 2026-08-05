@@ -7,10 +7,7 @@ import mx.kenzie.grammar.GrammarException;
 
 import java.lang.annotation.Annotation;
 import java.lang.constant.Constable;
-import java.lang.reflect.AnnotatedElement;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.lang.reflect.RecordComponent;
+import java.lang.reflect.*;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -123,6 +120,29 @@ public abstract class AbstractClassUnwrapper<Type> implements Unwrapper<Type> {
         boolean setter = method.getParameterCount() == 1 && method.getReturnType() == void.class;
         Class<?> valueType = setter ? method.getParameterTypes()[0] : method.getReturnType();
         return unwrap(method.trySetAccessible(), method.getName(), valueType, valueType.isArray() ? valueType.getComponentType() : void.class);
+    }
+
+    protected boolean shouldSkipDuringSerialisation(Field field) {
+        if (Modifier.isFinal(field.getModifiers())) {
+            String name = field.getName();
+            if ((name.startsWith("this$") || name.startsWith("var$"))) {
+                // this field is typically synthetic and added by the compiler to inner classes
+                return true;
+            }
+        }
+        return Modifier.isStatic(field.getModifiers()) || Modifier.isPrivate(field.getModifiers()) || Modifier.isTransient(field.getModifiers());
+    }
+
+    protected static Object defaultValue(Class<?> type) {
+        if (type == boolean.class) return Boolean.FALSE;
+        if (type == byte.class) return (byte) 0;
+        if (type == char.class) return (char) 0;
+        if (type == double.class) return 0.0;
+        if (type == float.class) return 0F;
+        if (type == int.class) return 0;
+        if (type == long.class) return (long) 0;
+        if (type == short.class) return (short) 0;
+        return null;
     }
 
     protected abstract void checkTypeOk(Class<?> type);
