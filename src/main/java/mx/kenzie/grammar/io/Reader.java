@@ -29,7 +29,7 @@ public interface Reader<Input, ReadingProblem extends Throwable> {
 
     Container readContainer(Input input) throws ReadingProblem;
 
-    void readContainerOpen(Input input, Container container) throws ReadingProblem;
+    void readContainerOpen(Input input) throws ReadingProblem;
 
     String readContainerKey(Input input) throws ReadingProblem;
 
@@ -46,9 +46,9 @@ public interface Reader<Input, ReadingProblem extends Throwable> {
         container.put(key, value);
     }
 
-    void readContainerAnd(Input input, Container container) throws ReadingProblem;
+    void readContainerAnd(Input input) throws ReadingProblem;
 
-    void readContainerClose(Input input, Container container) throws ReadingProblem;
+    void readContainerClose(Input input) throws ReadingProblem;
 
 
 }

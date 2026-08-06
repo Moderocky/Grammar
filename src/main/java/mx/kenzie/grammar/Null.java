@@ -5,7 +5,8 @@ import org.valross.constantine.Constant;
 
 import java.lang.constant.Constable;
 
-public class Null implements Canonical<Null>, Constant.UnitConstant {
+/// A canonical constant value representing 'null'.
+public final class Null implements Canonical<Null>, Constant.UnitConstant {
 
     public static final Null INSTANCE = new Null();
 
@@ -34,4 +35,13 @@ public class Null implements Canonical<Null>, Constant.UnitConstant {
         return INSTANCE;
     }
 
+    @Override
+    public int hashCode() {
+        return 0;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        return obj instanceof Null;
+    }
 }

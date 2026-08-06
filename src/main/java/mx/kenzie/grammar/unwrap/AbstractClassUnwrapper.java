@@ -108,7 +108,8 @@ public abstract class AbstractClassUnwrapper<Type> implements Unwrapper<Type> {
 
     Unwrap defaultUnwrapFrom(Field field) {
         Class<?> fieldType = field.getType();
-        return unwrap(field.trySetAccessible(), field.getName(), fieldType, fieldType.isArray() ? fieldType.getComponentType() : void.class);
+        Class<?> componentType = this.getComponentType(field.getGenericType());
+        return unwrap(field.trySetAccessible(), field.getName(), fieldType, componentType);
     }
 
     Unwrap defaultUnwrapFrom(RecordComponent field) {
@@ -122,6 +123,22 @@ public abstract class AbstractClassUnwrapper<Type> implements Unwrapper<Type> {
         return unwrap(method.trySetAccessible(), method.getName(), valueType, valueType.isArray() ? valueType.getComponentType() : void.class);
     }
 
+    protected Class<?> getComponentType(java.lang.reflect.Type fieldType) {
+        if (fieldType instanceof ParameterizedType secret) {
+            java.lang.reflect.Type rawType = secret.getRawType();
+            java.lang.reflect.Type[] types = secret.getActualTypeArguments();
+            if (rawType instanceof Class<?> cls) {
+                if (Collection.class.isAssignableFrom(cls) && types.length == 1 && types[0] instanceof Class<?> inner)
+                    return inner;
+                if (Map.class.isAssignableFrom(cls) && types.length == 2 && types[1] instanceof Class<?> inner)
+                    return inner;
+            }
+        } else if (fieldType instanceof Class<?> cls) {
+            if (cls.isArray()) return cls.getComponentType();
+        }
+        return void.class;
+    }
+
     protected boolean shouldSkipDuringSerialisation(Field field) {
         if (Modifier.isFinal(field.getModifiers())) {
             String name = field.getName();
@@ -133,16 +150,8 @@ public abstract class AbstractClassUnwrapper<Type> implements Unwrapper<Type> {
         return Modifier.isStatic(field.getModifiers()) || Modifier.isPrivate(field.getModifiers()) || Modifier.isTransient(field.getModifiers());
     }
 
-    protected static Object defaultValue(Class<?> type) {
-        if (type == boolean.class) return Boolean.FALSE;
-        if (type == byte.class) return (byte) 0;
-        if (type == char.class) return (char) 0;
-        if (type == double.class) return 0.0;
-        if (type == float.class) return 0F;
-        if (type == int.class) return 0;
-        if (type == long.class) return (long) 0;
-        if (type == short.class) return (short) 0;
-        return null;
+    protected Object defaultValue(Class<?> type) {
+        return grammar.defaultValue(type);
     }
 
     protected abstract void checkTypeOk(Class<?> type);

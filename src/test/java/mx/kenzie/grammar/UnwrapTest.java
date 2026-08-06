@@ -5,9 +5,12 @@ import mx.kenzie.grammar.unwrap.Unwrap;
 import org.junit.Test;
 
 import java.lang.constant.Constable;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.Assert.*;
 
+@SuppressWarnings("FieldMayBeFinal")
 public class UnwrapTest {
 
     @Test
@@ -82,6 +85,68 @@ public class UnwrapTest {
         assertEquals("test", object.bar.pqr);
         assertEquals("hello", object.name);
         assertEquals(-4, object.foo);
+    }
+
+    @Test
+    public void generic() {
+        class Foo {
+            List<String> list = List.of("a", "b", "c");
+        }
+        Grammar grammar = new Grammar();
+        grammar.register(Foo.class, new ObjectUnwrapper<>(grammar, Foo.class));
+
+        Foo foo = new Foo();
+        Constable marshal = grammar.marshal(foo);
+        assertTrue(marshal instanceof Container);
+        Container container = (Container) marshal;
+        assertEquals(1, container.size());
+
+        Foo object = grammar.unmarshal(Foo.class, container);
+        assertNotNull(object);
+        assertEquals(List.of("a", "b", "c"), object.list);
+    }
+
+    @Test
+    public void genericUnknown() {
+        class Foo<Q> {
+            List<Q> list = (List<Q>) List.of("a", "b", "c");
+        }
+        Grammar grammar = new Grammar();
+        grammar.register(Foo.class, new ObjectUnwrapper<>(grammar, Foo.class));
+
+        Foo<String> foo = new Foo<>();
+        Constable marshal = grammar.marshal(foo);
+        assertTrue(marshal instanceof Container);
+        Container container = (Container) marshal;
+        assertEquals(1, container.size());
+
+        Foo<?> object = grammar.unmarshal(Foo.class, container);
+        assertNotNull(object);
+        assertEquals(List.of("a", "b", "c"), object.list);
+    }
+
+    @Test
+    public void genericUnknownTypes() {
+        record Bar() {
+
+        }
+        class Foo<Q> {
+            List<Q> list = (List<Q>) List.of(new Bar());
+        }
+        Grammar grammar = new Grammar();
+        grammar.register(Foo.class, new ObjectUnwrapper<>(grammar, Foo.class));
+        grammar.registerRecord(Bar.class);
+
+        Foo<String> foo = new Foo<>();
+        Constable marshal = grammar.marshal(foo);
+        assertTrue(marshal instanceof Container);
+        Container container = (Container) marshal;
+        assertEquals(1, container.size());
+
+        Foo<?> object = grammar.unmarshal(Foo.class, container);
+        assertNotNull(object.list);
+        assertEquals(1, object.list.size());
+        assertFalse(object.list.getFirst() instanceof Bar);
     }
 
 }

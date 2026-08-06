@@ -69,7 +69,7 @@ public class RecordUnwrapper<Type extends Record> extends AbstractClassUnwrapper
             for (final var entry : detransformers.entrySet()) {
                 if (!container.containsKey(entry.getKey()))
                     //noinspection unchecked
-                    return (Type) defaultValue(components[index].getType());
+                    return (Type) this.defaultValue(components[index].getType());
                 arguments.add(entry.getValue().apply(container.get(entry.getKey())));
                 ++index;
             }

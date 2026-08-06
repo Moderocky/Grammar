@@ -39,8 +39,15 @@ public class Grammar {
         this.marshallingStrategiesByClass = new WeakHashMap<>();
         this.unmarshallingStrategies = new WeakHashMap<>();
         this.creatorFunctions = new WeakHashMap<>();
-        this.registerMarshallingStrategy(String.class, Function.identity());
-        this.registerUnmarshallingStrategy(String.class, Function.identity());
+        this.registerMarshallingStrategy(String.class, self -> self);
+        this.registerUnmarshallingStrategy(String.class, String::valueOf);
+        // Numbers require conversions
+        this.registerUnmarshallingStrategy(int.class, constable -> ((Number) constable).intValue());
+        this.registerUnmarshallingStrategy(long.class, constable -> ((Number) constable).longValue());
+        this.registerUnmarshallingStrategy(float.class, constable -> ((Number) constable).floatValue());
+        this.registerUnmarshallingStrategy(double.class, constable -> ((Number) constable).doubleValue());
+        this.registerUnmarshallingStrategy(short.class, constable -> ((Number) constable).shortValue());
+        this.registerUnmarshallingStrategy(byte.class, constable -> ((Number) constable).byteValue());
     }
 
     protected Grammar() {
@@ -65,7 +72,7 @@ public class Grammar {
     /// For types that should not be edited after creation (records) see [#registerUnmarshallingStrategy(Class, Function)]
     ///
     /// @param type              The registered type
-    /// @param noArgsConstructor A function that creates a \_new\_ value of the type
+    /// @param noArgsConstructor A function that creates a _new_ value of the type
     /// @param <Type>            The type
     public <Type extends Marshalled.Unmarshalled> void registerConstructor(Class<Type> type, Supplier<Type, GrammarException> noArgsConstructor) {
         this.creatorFunctions.put(type, noArgsConstructor);
@@ -90,6 +97,7 @@ public class Grammar {
         this.register(enumType, unwrapper);
     }
 
+    @SuppressWarnings({"rawtypes", "unchecked"})
     public <Type> void registerUncheckedObject(Class<Type> type) {
         if (type.isEnum()) this.registerEnum((Class) type);
         else if (type.isRecord()) this.registerRecord((Class) type);
@@ -115,10 +123,12 @@ public class Grammar {
     }
 
     public <Type> void registerMarshallingStrategy(Predicate<Object> predicate, Function<Type, Constable, GrammarException> strategy) {
+        //noinspection unchecked
         this.marshallingStrategies.addFirst((PredicatedMarshallingStrategy<Object, ?>) new PredicatedMarshallingStrategy<>(predicate, strategy));
     }
 
     public <Type> void registerFallbackMarshallingStrategy(Predicate<Object> predicate, Function<Type, Constable, GrammarException> strategy) {
+        //noinspection unchecked
         this.marshallingStrategies.addLast((PredicatedMarshallingStrategy<Object, ?>) new PredicatedMarshallingStrategy<>(predicate, strategy));
     }
 
@@ -240,7 +250,7 @@ public class Grammar {
     }
 
     private Object unmarshalPrimitive(Class<?> type, Constable wrapped) {
-        if (wrapped == null) return this.getDefault(type);
+        if (wrapped == null) return this.defaultValue(type);
         return wrapped;
     }
 
@@ -325,6 +335,7 @@ public class Grammar {
         return creatorFunctions.containsKey(type);
     }
 
+    @SuppressWarnings("unchecked")
     protected <Type> @NotNull Type create(Class<Type> type) throws GrammarException {
         if (type.isInterface()) {
             /*
@@ -377,7 +388,7 @@ public class Grammar {
         return marshallingStrategies;
     }
 
-    private Object getDefault(Class<?> type) {
+    protected Object defaultValue(Class<?> type) {
         if (type == int.class) return 0;
         if (type == boolean.class) return false;
         if (type == float.class) return 0.0F;
@@ -511,6 +522,11 @@ public class Grammar {
 
         public <Value> @NotNull Value create(Class<Value> type) {
             return Grammar.this.create(type);
+        }
+
+        public <Type> Type defaultValue(Class<Type> type) {
+            //noinspection unchecked
+            return (Type) Grammar.this.defaultValue(type);
         }
     }
 }
